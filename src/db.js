@@ -77,6 +77,15 @@ const edgeKey = (askerId, userId) => ({
   SK: `USER#${userId}`,
 });
 
+// Primary key for the username->person index. A Telegram @username uniquely
+// identifies one account, so unlike NAME# (many candidates per spoken name) this
+// is a clean 1:1 map. Code-owned: it lets edge learning turn a bare `@username`
+// mention into an edge to the right numeric id.
+const usernameKey = (username) => ({
+  PK: `USERNAME#${normalizeName(username)}`,
+  SK: "OWNER",
+});
+
 // Primary key for one append-only observation about a person, sorted by ISO
 // timestamp under that person's partition.
 const obsKey = (userId, ts) => ({ PK: `USER#${userId}`, SK: `OBS#${ts}` });
@@ -279,6 +288,44 @@ export const getNameCandidates = async (name) => {
     userId: i.user_id,
     weight: Number(i.weight ?? 0),
   }));
+};
+
+/**
+ * Record that an @username currently belongs to a numeric user id. Code-owned,
+ * structure only: latest write wins, so if a username changes hands the index
+ * follows. No-op for blank usernames. This is what lets a later `@username`
+ * mention be resolved to an id for edge learning.
+ *
+ * @param {string} username  The @username (with or without the leading @).
+ * @param {number|string} userId  Numeric user id that owns it.
+ */
+export const recordUsername = async (username, userId) => {
+  const key = normalizeName(username);
+  if (!key || !userId) return;
+  await docClient.send(
+    new UpdateCommand({
+      TableName: tableName(),
+      Key: usernameKey(username),
+      UpdateExpression: "SET user_id = :u",
+      ExpressionAttributeValues: { ":u": userId },
+    })
+  );
+};
+
+/**
+ * Resolve an @username to the numeric user id that owns it, or null if we have
+ * never seen that username speak. Self-improving: coverage grows as people post.
+ *
+ * @param {string} username  The @username (with or without the leading @).
+ * @returns {Promise<number|string|null>}
+ */
+export const resolveUsername = async (username) => {
+  const key = normalizeName(username);
+  if (!key) return null;
+  const { Item } = await docClient.send(
+    new GetCommand({ TableName: tableName(), Key: usernameKey(username) })
+  );
+  return Item?.user_id ?? null;
 };
 
 /**

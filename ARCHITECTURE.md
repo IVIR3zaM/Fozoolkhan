@@ -33,6 +33,7 @@ labels that point at an id.
 | `USER#<uid>` | `PROFILE` | display names seen, usernames seen, short personality summary, joke styles that land, `last_updated` |
 | `USER#<uid>` | `OBS#<timestamp>` | append-only raw observation (one line). Has a **TTL** so old ones auto-expire. |
 | `NAME#<name>` | `USER#<uid>` | `weight` that this spoken name refers to this person |
+| `USERNAME#<username>` | `OWNER` | numeric `user_id` that currently owns this @username (1:1; lets a bare `@username` mention become an edge) |
 | `EDGE#<uid_a>` | `USER#<uid_b>` | `count` of how often A talks with/about B |
 | `BUDGET` | `MONTH#<YYYY-MM>` | running monthly spend estimate (see cost control) |
 

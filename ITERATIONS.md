@@ -52,7 +52,7 @@ Mark done by changing `[ ]` to `[x]`.
   **Done when:** observations accumulate and a summarization run folds them into
   the profile without the LLM rewriting structured fields.
 
-- [ ] **(9) Edge learning**
+- [x] **(9) Edge learning**
   Increment `EDGE#<a> → b` when A addresses/replies to B.
   **Done when:** repeated interactions raise the edge count and measurably bias
   name resolution.

@@ -15,6 +15,8 @@ import {
   getNameCandidates,
   getProfile,
   normalizeName,
+  recordUsername,
+  resolveUsername,
 } from "./db.js";
 
 // Very common Persian words that look like tokens but are never names. Skipping
@@ -140,9 +142,13 @@ export const describeAmbiguity = async ({ name, candidates }) => {
  * concrete addressing signals:
  *   - the sender's own first name -> themselves (activity grows the weight),
  *   - a reply to another real person -> an edge plus that person's name,
- *   - an explicit text-mention -> the strongest "this label means this id".
- * Runs for every message, not only when the bot is addressed, so the table
- * self-improves over time with zero LLM involvement.
+ *   - an explicit text-mention -> the strongest "this label means this id",
+ *   - a bare `@username` mention -> an edge, by resolving the username to an id
+ *     through the code-owned username index (milestone 9: the common way one
+ *     person addresses another in a group).
+ * Every place a user with a @username appears also feeds that username index, so
+ * the lookup self-improves. Runs for every message, not only when the bot is
+ * addressed, so the table self-improves over time with zero LLM involvement.
  *
  * @param {object} message  Telegram `message` object.
  */
@@ -152,6 +158,7 @@ export const learnFromMessage = async (message) => {
 
   const tasks = [];
   if (from.first_name) tasks.push(bumpNameWeight(from.first_name, from.id));
+  if (from.username) tasks.push(recordUsername(from.username, from.id));
 
   // Reply addressing: the sender interacts with the replied-to person, and that
   // person is being addressed by their name. Skip replies to bots (incl. us).
@@ -161,16 +168,36 @@ export const learnFromMessage = async (message) => {
     if (repliedTo.first_name) {
       tasks.push(bumpNameWeight(repliedTo.first_name, repliedTo.id));
     }
+    if (repliedTo.username) {
+      tasks.push(recordUsername(repliedTo.username, repliedTo.id));
+    }
   }
 
   // Explicit text-mentions carry both the spoken label and the user id.
   const text = message.text ?? message.caption ?? "";
   const entities = message.entities ?? message.caption_entities ?? [];
   for (const e of entities) {
-    if (e.type !== "text_mention" || !e.user?.id || e.user.is_bot) continue;
-    const label = text.substr(e.offset, e.length);
-    tasks.push(bumpNameWeight(label, e.user.id));
-    if (e.user.id !== from.id) tasks.push(bumpEdge(from.id, e.user.id));
+    if (e.type === "text_mention" && e.user?.id && !e.user.is_bot) {
+      const label = text.substr(e.offset, e.length);
+      tasks.push(bumpNameWeight(label, e.user.id));
+      if (e.user.username) tasks.push(recordUsername(e.user.username, e.user.id));
+      if (e.user.id !== from.id) tasks.push(bumpEdge(from.id, e.user.id));
+      continue;
+    }
+    // Bare `@username` mentions carry only the label. Resolve it to an id via
+    // the username index and, if we know who it is, record that the sender
+    // addresses that person (an edge). Only fires once the target has spoken.
+    if (e.type === "mention") {
+      const username = text.substr(e.offset, e.length); // includes leading @.
+      tasks.push(
+        (async () => {
+          const targetId = await resolveUsername(username);
+          if (targetId && targetId !== from.id) {
+            await bumpEdge(from.id, targetId);
+          }
+        })()
+      );
+    }
   }
 
   await Promise.allSettled(tasks);
