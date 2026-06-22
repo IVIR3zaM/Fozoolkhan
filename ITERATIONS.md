@@ -19,7 +19,7 @@ Mark done by changing `[ ]` to `[x]`.
   **Done when:** the bot reacts only to mentions/replies and stays silent
   otherwise.
 
-- [ ] **(3) DynamoDB table + write/read a profile**
+- [x] **(3) DynamoDB table + write/read a profile**
   Create/connect the single table. Write and read a `USER#<uid> / PROFILE` item.
   **Done when:** a profile item can be written and read back by `user_id`.
 

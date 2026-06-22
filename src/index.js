@@ -1,12 +1,16 @@
 // Lambda handler for فضول‌خان (Fozoolkhan).
 //
-// Milestone 2: only react when the bot was @-mentioned or replied to. Every
-// other update is ignored (we still return 200 so Telegram does not retry).
+// Milestone 3: on an addressed message, record the sender's PROFILE item in
+// DynamoDB and read it back (anchored to the numeric user_id). Replying is still
+// a later milestone.
 //
 // Secrets come from environment variables, never from a committed file:
 //   - TELEGRAM_SECRET_TOKEN verifies the webhook header.
 //   - BOT_USERNAME (not a secret, but kept in env to match) is the bot's
 //     Telegram @username, used to detect mentions.
+//   - DDB_TABLE_NAME is the single DynamoDB table.
+
+import { recordSighting, getProfile } from "./db.js";
 
 // Telegram sends this header on every webhook request when a secret token is
 // configured. Function URL lowercases all header names.
@@ -87,6 +91,17 @@ export const handler = async (event) => {
   }
 
   console.log("Bot was addressed (mention or reply); will respond later.");
+
+  // Code-owned structure: record the sender into their PROFILE item and read it
+  // back by numeric user_id. (Replying is a later milestone.)
+  try {
+    await recordSighting(message.from);
+    const profile = await getProfile(message.from.id);
+    console.log("Profile after sighting:", JSON.stringify(profile));
+  } catch (err) {
+    // A storage hiccup must not turn into a Telegram retry storm.
+    console.error("Failed to record/read profile:", err?.message);
+  }
 
   return ok;
 };
