@@ -1,0 +1,14 @@
+{
+  "name": "fozoolkhan",
+  "version": "0.1.0",
+  "description": "A witty Persian-speaking Telegram group bot on AWS (Lambda + DynamoDB + Bedrock).",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.0.0",
+    "@aws-sdk/lib-dynamodb": "^3.0.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.0.0"
+  }
+}

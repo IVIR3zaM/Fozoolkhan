@@ -1,0 +1,9 @@
+.vscode/
+node_modules/
+config.js
+.env
+.env.*
+*.log
+.DS_Store
+dist/
+*.zip
