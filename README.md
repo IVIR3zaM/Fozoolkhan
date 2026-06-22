@@ -52,7 +52,8 @@ everything stays cheap and inside AWS.
    token. Disable privacy mode so it can see group mentions/replies.
 2. **Enable Bedrock model access** for the Claude Haiku model in your AWS region.
 3. **Create the DynamoDB table** (single-table, on-demand) — see
-   [ARCHITECTURE.md](ARCHITECTURE.md) for keys.
+   [ARCHITECTURE.md](ARCHITECTURE.md) for keys. Enable **TTL on the `ttl`
+   attribute** so append-only observations auto-expire.
 4. **Deploy the Lambda** and enable a **Function URL**.
 5. **Set the Telegram webhook** to the Function URL (with a secret token).
 6. **Create an AWS Budget** alerting at 50/80/100% of €5.

@@ -46,7 +46,7 @@ Mark done by changing `[ ]` to `[x]`.
   **Done when:** the bot resolves a name to the right person, or makes the
   ambiguity the joke; weights update over time.
 
-- [ ] **(8) Append-only observations + summarization**
+- [x] **(8) Append-only observations + summarization**
   Append one-line `OBS#<ts>` items (with TTL). A separate occasional step
   compresses observations into the profile summary.
   **Done when:** observations accumulate and a summarization run folds them into

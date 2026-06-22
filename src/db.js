@@ -8,6 +8,11 @@
 // and the who-talks-to-whom edges (`EDGE#<uid_a> / USER#<uid_b>` with a `count`).
 // These are pure structure — incremented by code from real addressing signals,
 // never written by the LLM.
+// Milestone 8: the append-only observation log (`USER#<uid> / OBS#<ts>`, each
+// item TTL-expiring) and a code-owned write of *only* the free-text `summary`
+// field. The LLM contributes prose (one-line observations, and the compressed
+// summary via the separate summarization step); code still owns every structure
+// around it and decides which field that prose may land in.
 //
 // Code owns all structure here. Everything is anchored to the numeric Telegram
 // `user_id` — never the username or display name, which are mutable labels. The
@@ -71,6 +76,14 @@ const edgeKey = (askerId, userId) => ({
   PK: `EDGE#${askerId}`,
   SK: `USER#${userId}`,
 });
+
+// Primary key for one append-only observation about a person, sorted by ISO
+// timestamp under that person's partition.
+const obsKey = (userId, ts) => ({ PK: `USER#${userId}`, SK: `OBS#${ts}` });
+
+// How many days an observation lives before DynamoDB TTL auto-expires it, so the
+// log (and the summarization input it feeds) stays small. Token frugality.
+const obsTtlDays = () => Number(process.env.OBS_TTL_DAYS ?? 30);
 
 // How many recent messages to keep (and later send as context). Never full
 // history — token frugality is a hard rule (see AGENTS.md).
@@ -281,4 +294,71 @@ export const getEdgeCount = async (askerId, userId) => {
     new GetCommand({ TableName: tableName(), Key: edgeKey(askerId, userId) })
   );
   return Number(Item?.count ?? 0);
+};
+
+/**
+ * Append a one-line observation about a person to their append-only OBS# log.
+ * This is the only free-text the LLM contributes here, and it lands in its own
+ * item — never in a structured field. Each item carries a `ttl` (epoch seconds)
+ * so old observations auto-expire, keeping the log and the later summarization
+ * input small (token frugality is a hard rule — see AGENTS.md).
+ *
+ * @param {number|string} userId  Numeric user id the observation is about.
+ * @param {string} line  One-line observation (LLM-produced prose).
+ */
+export const appendObservation = async (userId, line) => {
+  const obs = (line ?? "").trim();
+  if (!userId || !obs) return;
+  const ttl = Math.floor(Date.now() / 1000) + obsTtlDays() * 86400;
+  await docClient.send(
+    new PutCommand({
+      TableName: tableName(),
+      Item: { ...obsKey(userId, new Date().toISOString()), obs, ttl },
+    })
+  );
+};
+
+/**
+ * Read a person's append-only observations, oldest first. Bounded by the
+ * partition's TTL-expiring items and a hard `Limit`, so the summarization step
+ * never assembles an unbounded payload.
+ *
+ * @param {number|string} userId  Numeric user id.
+ * @returns {Promise<string[]>} Observation lines, oldest first.
+ */
+export const getObservations = async (userId) => {
+  if (!userId) return [];
+  const { Items } = await docClient.send(
+    new QueryCommand({
+      TableName: tableName(),
+      KeyConditionExpression: "PK = :pk AND begins_with(SK, :obs)",
+      ExpressionAttributeValues: { ":pk": `USER#${userId}`, ":obs": "OBS#" },
+      Limit: 50,
+    })
+  );
+  return (Items ?? []).map((i) => i.obs).filter(Boolean);
+};
+
+/**
+ * Write a person's free-text profile `summary` — and *only* that field. This is
+ * the single place the LLM's prose (via the separate summarization step) reaches
+ * the PROFILE item; code still owns every structured field around it. The
+ * condition guards against creating a profile that recordSighting hasn't.
+ *
+ * @param {number|string} userId  Numeric user id.
+ * @param {string} summary  Compressed free-text summary (LLM-produced prose).
+ */
+export const setProfileSummary = async (userId, summary) => {
+  const text = (summary ?? "").trim();
+  if (!userId || !text) return;
+  await docClient.send(
+    new UpdateCommand({
+      TableName: tableName(),
+      Key: profileKey(userId),
+      UpdateExpression: "SET #s = :s, last_updated = :t",
+      ConditionExpression: "attribute_exists(PK)",
+      ExpressionAttributeNames: { "#s": "summary" },
+      ExpressionAttributeValues: { ":s": text, ":t": new Date().toISOString() },
+    })
+  );
 };

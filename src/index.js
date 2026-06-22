@@ -20,10 +20,50 @@ import {
   getMonthlySpend,
   addMonthlySpend,
   getProfile,
+  appendObservation,
+  getObservations,
+  setProfileSummary,
 } from "./db.js";
 import { resolveName, describeAmbiguity, learnFromMessage } from "./names.js";
-import { generateReply } from "./bedrock.js";
+import { generateReply, summarizeObservations } from "./bedrock.js";
 import { sendMessage } from "./telegram.js";
+
+// How many observations accumulate before the occasional summarization step
+// folds them into a person's profile summary. Frugal: summarization is itself a
+// Bedrock call, so it runs once every this-many observations, not every message.
+const summaryThreshold = () => Number(process.env.OBS_SUMMARY_THRESHOLD ?? 8);
+
+/**
+ * Side effect after a reply (code-owned): append the LLM's one-line observation
+ * about the speaker to their append-only OBS# log, then — occasionally, once a
+ * threshold of observations has accumulated — compress them into the free-text
+ * profile summary. The summarization is a separate Bedrock call, so it honours
+ * the spend guard and increments the monthly counter; it is never the path that
+ * writes structured data (only setProfileSummary, the summary field, is touched).
+ *
+ * @param {number|string} userId  The speaker's numeric user id.
+ * @param {string} observation  The one-line observation (may be empty).
+ * @param {number} monthlyBudget  Euro ceiling, for the spend guard re-check.
+ */
+const rememberObservation = async (userId, observation, monthlyBudget) => {
+  if (!userId || !observation) return;
+  await appendObservation(userId, observation);
+
+  const observations = await getObservations(userId);
+  const count = observations.length;
+  if (count === 0 || count % summaryThreshold() !== 0) return;
+
+  // Spend guard is never bypassed: re-check before this extra Bedrock call.
+  if ((await getMonthlySpend()) >= monthlyBudget) return;
+
+  const profile = await getProfile(userId);
+  const { summary, costEur } = await summarizeObservations({
+    summary: profile?.summary,
+    observations,
+  });
+  await addMonthlySpend(costEur);
+  await setProfileSummary(userId, summary);
+};
 
 // Build a short context snippet from a profile: a name label plus the free-text
 // summary (still empty until the summarization milestone). Code-owned structure.
@@ -197,7 +237,7 @@ export const handler = async (event) => {
   // it back, threaded under the triggering message. Errors are swallowed so
   // Telegram does not retry.
   try {
-    const { text, costEur } = await generateReply({
+    const { text, observation, costEur } = await generateReply({
       recentMessages,
       profileSnippet,
       nameNote,
@@ -207,6 +247,15 @@ export const handler = async (event) => {
     await addMonthlySpend(costEur);
     if (text) {
       await sendMessage(message.chat.id, text, message.message_id);
+    }
+
+    // Side effect: remember a one-line observation about the speaker and, every
+    // so often, fold accumulated observations into their profile summary. Kept
+    // in its own try so a memory hiccup never looks like a failed reply.
+    try {
+      await rememberObservation(message.from?.id, observation, monthlyBudget);
+    } catch (err) {
+      console.error("Failed to record observation/summary:", err?.message);
     }
   } catch (err) {
     console.error("Failed to generate/send reply:", err?.message);

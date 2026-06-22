@@ -25,6 +25,13 @@ export const config = {
   // How many recent messages to include as context (never full history).
   CONTEXT_MESSAGE_COUNT: 5,
 
+  // Append-only observation log. OBS_TTL_DAYS is how long each one-line
+  // observation lives before DynamoDB TTL auto-expires it (enable TTL on the
+  // `ttl` attribute). OBS_SUMMARY_THRESHOLD is how many observations accumulate
+  // before the occasional summarization step folds them into a profile summary.
+  OBS_TTL_DAYS: 30,
+  OBS_SUMMARY_THRESHOLD: 8,
+
   // The bot's Telegram username (without @), used to detect mentions.
   BOT_USERNAME: "fozoolkhan",
 
