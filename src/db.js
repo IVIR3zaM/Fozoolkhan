@@ -4,6 +4,10 @@
 // Milestone 5: keep a small rolling per-chat buffer of the most recent messages
 // (`CHAT#<chatId> / RECENT`) so we can assemble tight context without ever
 // sending full history to the model.
+// Milestone 7: the name->person map (`NAME#<name> / USER#<uid>` with a `weight`)
+// and the who-talks-to-whom edges (`EDGE#<uid_a> / USER#<uid_b>` with a `count`).
+// These are pure structure — incremented by code from real addressing signals,
+// never written by the LLM.
 //
 // Code owns all structure here. Everything is anchored to the numeric Telegram
 // `user_id` — never the username or display name, which are mutable labels. The
@@ -16,6 +20,7 @@ import {
   DynamoDBDocumentClient,
   GetCommand,
   PutCommand,
+  QueryCommand,
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 
@@ -36,6 +41,36 @@ const budgetKey = (month) => ({ PK: "BUDGET", SK: `MONTH#${month}` });
 
 // The current month as `YYYY-MM` (UTC), matching the BUDGET item's SK.
 export const currentMonth = () => new Date().toISOString().slice(0, 7);
+
+/**
+ * Normalize a spoken name into a stable key so the same name always points at
+ * the same `NAME#` partition. Code-owned: trims, lowercases, drops a leading
+ * `@`, folds common Arabic letter forms to their Persian equivalents (so e.g.
+ * Arabic and Persian yeh/kaf key together), and strips surrounding punctuation.
+ *
+ * @param {string} raw  Raw spoken name or token.
+ * @returns {string} Normalized key (may be empty).
+ */
+export const normalizeName = (raw) => {
+  if (!raw) return "";
+  let s = String(raw).trim().toLowerCase();
+  s = s.replace(/^@+/, "");
+  s = s.replace(/[يى]/g, "ی").replace(/ك/g, "ک"); // Arabic -> Persian.
+  s = s.replace(/[«»"'`،؛؟.!?,:()\[\]{}…]/g, "");
+  return s.trim();
+};
+
+// Primary keys for the name->person map and the who-talks-to-whom edges. Both
+// are anchored to the numeric user id; the name is only a label that points at
+// an id (see ARCHITECTURE.md).
+const nameKey = (name, userId) => ({
+  PK: `NAME#${normalizeName(name)}`,
+  SK: `USER#${userId}`,
+});
+const edgeKey = (askerId, userId) => ({
+  PK: `EDGE#${askerId}`,
+  SK: `USER#${userId}`,
+});
 
 // How many recent messages to keep (and later send as context). Never full
 // history — token frugality is a hard rule (see AGENTS.md).
@@ -166,4 +201,84 @@ export const addMonthlySpend = async (amountEur, month = currentMonth()) => {
       ExpressionAttributeValues: { ":amt": amountEur },
     })
   );
+};
+
+/**
+ * Increment the weight that a spoken `name` refers to `userId`. Code-owned: the
+ * caller derives the (name, id) pair from a real addressing signal (a person's
+ * own name, a reply target, an explicit text-mention). No-op for blank names.
+ *
+ * @param {string} name  Spoken name/label.
+ * @param {number|string} userId  Numeric user id the name points at.
+ * @param {number} [amount]  Increment (default 1).
+ */
+export const bumpNameWeight = async (name, userId, amount = 1) => {
+  const key = normalizeName(name);
+  if (!key || !userId) return;
+  await docClient.send(
+    new UpdateCommand({
+      TableName: tableName(),
+      Key: nameKey(name, userId),
+      UpdateExpression: "ADD weight :n SET user_id = :u",
+      ExpressionAttributeValues: { ":n": amount, ":u": userId },
+    })
+  );
+};
+
+/**
+ * Increment the interaction count for the edge asker -> userId (how often the
+ * asker addresses/replies to that person). Code-owned, structure only.
+ *
+ * @param {number|string} askerId  Who is addressing.
+ * @param {number|string} userId  Who is being addressed.
+ * @param {number} [amount]  Increment (default 1).
+ */
+export const bumpEdge = async (askerId, userId, amount = 1) => {
+  if (!askerId || !userId) return;
+  await docClient.send(
+    new UpdateCommand({
+      TableName: tableName(),
+      Key: edgeKey(askerId, userId),
+      UpdateExpression: "ADD #c :n",
+      ExpressionAttributeNames: { "#c": "count" },
+      ExpressionAttributeValues: { ":n": amount },
+    })
+  );
+};
+
+/**
+ * List all candidate people a spoken name could refer to, with their weights.
+ *
+ * @param {string} name  Spoken name/label.
+ * @returns {Promise<Array<{userId: number|string, weight: number}>>}
+ */
+export const getNameCandidates = async (name) => {
+  const key = normalizeName(name);
+  if (!key) return [];
+  const { Items } = await docClient.send(
+    new QueryCommand({
+      TableName: tableName(),
+      KeyConditionExpression: "PK = :pk",
+      ExpressionAttributeValues: { ":pk": `NAME#${key}` },
+    })
+  );
+  return (Items ?? []).map((i) => ({
+    userId: i.user_id,
+    weight: Number(i.weight ?? 0),
+  }));
+};
+
+/**
+ * Read the interaction count for the edge asker -> userId (0 if none yet).
+ *
+ * @param {number|string} askerId  Who is addressing.
+ * @param {number|string} userId  Who is being addressed.
+ * @returns {Promise<number>}
+ */
+export const getEdgeCount = async (askerId, userId) => {
+  if (!askerId || !userId) return 0;
+  const { Item } = await docClient.send(
+    new GetCommand({ TableName: tableName(), Key: edgeKey(askerId, userId) })
+  );
+  return Number(Item?.count ?? 0);
 };

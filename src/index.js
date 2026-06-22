@@ -19,9 +19,16 @@ import {
   recordMessage,
   getMonthlySpend,
   addMonthlySpend,
+  getProfile,
 } from "./db.js";
+import { resolveName, describeAmbiguity, learnFromMessage } from "./names.js";
 import { generateReply } from "./bedrock.js";
 import { sendMessage } from "./telegram.js";
+
+// Build a short context snippet from a profile: a name label plus the free-text
+// summary (still empty until the summarization milestone). Code-owned structure.
+const snippetOf = (profile) =>
+  [profile?.names_seen?.[0], profile?.summary].filter(Boolean).join(" — ");
 
 // Pre-written Persian "broke until next month" line. Sent when the monthly
 // spend guard trips, instead of calling Bedrock. Funny, never apologetic.
@@ -120,6 +127,17 @@ export const handler = async (event) => {
     }
   }
 
+  // Code-owned learning: every visible message teaches the name->person map and
+  // the who-talks-to-whom edges (sender's own name, reply targets, text-mentions).
+  // Runs for all traffic, not only when addressed, so weights improve over time.
+  if (message) {
+    try {
+      await learnFromMessage(message);
+    } catch (err) {
+      console.error("Failed to learn name/edge weights:", err?.message);
+    }
+  }
+
   if (!shouldRespond(message, process.env.BOT_USERNAME)) {
     // Not addressed to us — stay silent but acknowledge the webhook.
     return ok;
@@ -147,16 +165,32 @@ export const handler = async (event) => {
   }
 
   // Record the sender into their PROFILE item (code-owned, keyed by numeric
-  // user_id) and use the returned profile to build a short context snippet.
+  // user_id). By default the snippet describes the speaker so the bot knows who
+  // it's replying to. Then run name resolution: if the speaker is asking about
+  // someone by name, swap in that person's profile when we're confident, or hand
+  // the LLM an ambiguity note so the "which one?" becomes the joke.
   let profileSnippet = "";
+  let nameNote = "";
   try {
-    const profile = await recordSighting(message.from);
-    const name = profile?.names_seen?.[0] ?? "";
-    // For now `summary` is empty (filled by the later summarization milestone);
-    // the name alone still tells the model who it is replying to.
-    profileSnippet = [name, profile?.summary].filter(Boolean).join(" — ");
+    const speaker = await recordSighting(message.from);
+    profileSnippet = snippetOf(speaker);
+
+    const resolution = await resolveName(
+      message.from?.id,
+      messageText,
+      process.env.BOT_USERNAME
+    );
+    if (
+      resolution.status === "confident" &&
+      resolution.userId !== message.from?.id
+    ) {
+      const subject = await getProfile(resolution.userId);
+      if (subject) profileSnippet = snippetOf(subject);
+    } else if (resolution.status === "ambiguous") {
+      nameNote = await describeAmbiguity(resolution);
+    }
   } catch (err) {
-    console.error("Failed to record/read profile:", err?.message);
+    console.error("Failed to resolve/read profile:", err?.message);
   }
 
   // Generate an in-character Persian reply from the assembled context and send
@@ -166,6 +200,7 @@ export const handler = async (event) => {
     const { text, costEur } = await generateReply({
       recentMessages,
       profileSnippet,
+      nameNote,
     });
     // Increment the monthly spend counter after every successful call (the
     // estimated euro cost from the call's token usage).

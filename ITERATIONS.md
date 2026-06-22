@@ -40,7 +40,7 @@ Mark done by changing `[ ]` to `[x]`.
   **Done when:** forcing the counter over the ceiling makes the bot decline with
   the funny line and skip Bedrock; the counter increments on real calls.
 
-- [ ] **(7) Name resolution + weights**
+- [x] **(7) Name resolution + weights**
   Query `NAME#<name>`, bias by `EDGE#<asker>`, answer when confident, joke when
   ambiguous. Code learns weights from `@username`/reply addressing.
   **Done when:** the bot resolves a name to the right person, or makes the
