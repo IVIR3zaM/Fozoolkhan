@@ -16,6 +16,7 @@ import {
   DynamoDBDocumentClient,
   GetCommand,
   PutCommand,
+  UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 
 // One shared client per Lambda container. The table name comes from the
@@ -28,6 +29,13 @@ const profileKey = (userId) => ({ PK: `USER#${userId}`, SK: "PROFILE" });
 
 // Primary key for a chat's rolling recent-messages buffer.
 const recentKey = (chatId) => ({ PK: `CHAT#${chatId}`, SK: "RECENT" });
+
+// Primary key for the running monthly spend counter. Keyed by month so it
+// resets naturally at month rollover (no cron, no cleanup).
+const budgetKey = (month) => ({ PK: "BUDGET", SK: `MONTH#${month}` });
+
+// The current month as `YYYY-MM` (UTC), matching the BUDGET item's SK.
+export const currentMonth = () => new Date().toISOString().slice(0, 7);
 
 // How many recent messages to keep (and later send as context). Never full
 // history — token frugality is a hard rule (see AGENTS.md).
@@ -123,4 +131,39 @@ export const recordMessage = async (chatId, from, text) => {
   );
 
   return recent;
+};
+
+/**
+ * Read the running spend estimate (in euros) for a month. Code-owned: this is
+ * the brake the spend guard reads before every Bedrock call. Defaults to 0 when
+ * the month has no item yet.
+ *
+ * @param {string} [month]  `YYYY-MM`; defaults to the current month.
+ * @returns {Promise<number>} Euros spent so far this month.
+ */
+export const getMonthlySpend = async (month = currentMonth()) => {
+  const { Item } = await docClient.send(
+    new GetCommand({ TableName: tableName(), Key: budgetKey(month) })
+  );
+  return Number(Item?.spend_eur ?? 0);
+};
+
+/**
+ * Atomically add to the month's spend estimate after a successful Bedrock call.
+ * Uses a DynamoDB `ADD` so concurrent Lambda invocations can't clobber each
+ * other. Never called when the guard has blocked a call (nothing was spent).
+ *
+ * @param {number} amountEur  Estimated euro cost of the call (must be > 0).
+ * @param {string} [month]  `YYYY-MM`; defaults to the current month.
+ */
+export const addMonthlySpend = async (amountEur, month = currentMonth()) => {
+  if (!(amountEur > 0)) return;
+  await docClient.send(
+    new UpdateCommand({
+      TableName: tableName(),
+      Key: budgetKey(month),
+      UpdateExpression: "ADD spend_eur :amt",
+      ExpressionAttributeValues: { ":amt": amountEur },
+    })
+  );
 };

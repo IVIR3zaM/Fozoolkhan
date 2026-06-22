@@ -34,7 +34,7 @@ Mark done by changing `[ ]` to `[x]`.
   **Done when:** replies reflect recent context and the relevant profile, with
   no full-history payloads.
 
-- [ ] **(6) Spend guard + monthly counter**
+- [x] **(6) Spend guard + monthly counter**
   Read `BUDGET / MONTH#<YYYY-MM>` before each call; block + Persian "broke" line
   when over `MONTHLY_BUDGET_EUR`; increment after each call; reset by month key.
   **Done when:** forcing the counter over the ceiling makes the bot decline with

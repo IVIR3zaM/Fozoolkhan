@@ -22,6 +22,14 @@ const modelId = () =>
   process.env.BEDROCK_MODEL_ID ?? "anthropic.claude-3-5-haiku-20241022-v1:0";
 const maxTokens = () => Number(process.env.MAX_RESPONSE_TOKENS ?? 300);
 
+// Per-1K-token prices in euros, used only to estimate spend for the monthly
+// counter (the spend guard's brake). Defaults match Claude 3.5 Haiku on
+// Bedrock; override via env if the model or FX rate changes.
+const inputPricePer1K = () =>
+  Number(process.env.BEDROCK_INPUT_PRICE_PER_1K_EUR ?? 0.0008);
+const outputPricePer1K = () =>
+  Number(process.env.BEDROCK_OUTPUT_PRICE_PER_1K_EUR ?? 0.004);
+
 // The character. Persian voice on purpose: the bot must be funny *in Persian*.
 // The humor boundary (AGENTS.md) is baked in as a trait of a clever friend who
 // is too witty to need to go low — not as a bolted-on disclaimer.
@@ -67,7 +75,8 @@ const buildUserContent = (recentMessages, profileSnippet) => {
  * @param {Array<{name: string, text: string}>} [context.recentMessages]  Last
  *   few messages, oldest first; the triggering message is the final entry.
  * @param {string} [context.profileSnippet]  Short note about the speaker.
- * @returns {Promise<string>} The bot's Persian reply.
+ * @returns {Promise<{text: string, costEur: number}>} The bot's Persian reply
+ *   and an estimated euro cost (for the monthly spend counter).
  */
 export const generateReply = async ({ recentMessages, profileSnippet } = {}) => {
   const command = new InvokeModelCommand({
@@ -94,5 +103,13 @@ export const generateReply = async ({ recentMessages, profileSnippet } = {}) => 
     .join("")
     .trim();
 
-  return text;
+  // Estimate this call's euro cost from the usage Claude reports, so the spend
+  // guard's monthly counter reflects real token consumption.
+  const inputTokens = payload.usage?.input_tokens ?? 0;
+  const outputTokens = payload.usage?.output_tokens ?? 0;
+  const costEur =
+    (inputTokens / 1000) * inputPricePer1K() +
+    (outputTokens / 1000) * outputPricePer1K();
+
+  return { text, costEur };
 };

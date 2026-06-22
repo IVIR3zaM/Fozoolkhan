@@ -3,6 +3,9 @@
 // Milestone 5: every visible message is appended to a small rolling per-chat
 // buffer. When the bot is addressed, it assembles tight context (the last few
 // messages + the speaker's profile snippet) and replies — never full history.
+// Milestone 6: a monthly spend guard runs before every Bedrock call. Once the
+// running estimate passes MONTHLY_BUDGET_EUR the bot declines with a pre-written
+// Persian line instead of calling Bedrock; each real call increments the counter.
 //
 // Secrets come from environment variables, never from a committed file:
 //   - TELEGRAM_SECRET_TOKEN verifies the webhook header.
@@ -11,9 +14,19 @@
 //     Telegram @username, used to detect mentions.
 //   - DDB_TABLE_NAME is the single DynamoDB table.
 
-import { recordSighting, recordMessage } from "./db.js";
+import {
+  recordSighting,
+  recordMessage,
+  getMonthlySpend,
+  addMonthlySpend,
+} from "./db.js";
 import { generateReply } from "./bedrock.js";
 import { sendMessage } from "./telegram.js";
+
+// Pre-written Persian "broke until next month" line. Sent when the monthly
+// spend guard trips, instead of calling Bedrock. Funny, never apologetic.
+const BROKE_LINE =
+  "این ماه دیگه پولم ته کشید، تا اول ماه بعد مهمونِ سکوتمی 😅 ولی دلم باهاته.";
 
 // Telegram sends this header on every webhook request when a secret token is
 // configured. Function URL lowercases all header names.
@@ -114,6 +127,25 @@ export const handler = async (event) => {
 
   console.log("Bot was addressed (mention or reply); generating a reply.");
 
+  // SPEND GUARD (must never be bypassed — see AGENTS.md): before any Bedrock
+  // call, read the running monthly spend. If we're over the ceiling, reply with
+  // the pre-written Persian line and do NOT call Bedrock. The counter is keyed
+  // by month, so it resets at month rollover.
+  const monthlyBudget = Number(process.env.MONTHLY_BUDGET_EUR ?? 5);
+  try {
+    const spent = await getMonthlySpend();
+    if (spent >= monthlyBudget) {
+      console.log(`Spend guard tripped: ${spent} >= ${monthlyBudget} EUR.`);
+      await sendMessage(message.chat.id, BROKE_LINE, message.message_id);
+      return ok;
+    }
+  } catch (err) {
+    // If we can't read the counter we can't prove we're under budget — fail
+    // closed and stay quiet rather than risk uncapped spend.
+    console.error("Spend guard read failed; skipping Bedrock:", err?.message);
+    return ok;
+  }
+
   // Record the sender into their PROFILE item (code-owned, keyed by numeric
   // user_id) and use the returned profile to build a short context snippet.
   let profileSnippet = "";
@@ -131,9 +163,15 @@ export const handler = async (event) => {
   // it back, threaded under the triggering message. Errors are swallowed so
   // Telegram does not retry.
   try {
-    const reply = await generateReply({ recentMessages, profileSnippet });
-    if (reply) {
-      await sendMessage(message.chat.id, reply, message.message_id);
+    const { text, costEur } = await generateReply({
+      recentMessages,
+      profileSnippet,
+    });
+    // Increment the monthly spend counter after every successful call (the
+    // estimated euro cost from the call's token usage).
+    await addMonthlySpend(costEur);
+    if (text) {
+      await sendMessage(message.chat.id, text, message.message_id);
     }
   } catch (err) {
     console.error("Failed to generate/send reply:", err?.message);
