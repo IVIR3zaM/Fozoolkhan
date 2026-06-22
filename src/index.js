@@ -1,8 +1,8 @@
 // Lambda handler for فضول‌خان (Fozoolkhan).
 //
-// Milestone 4: on an addressed message, call Claude Haiku via Bedrock with the
-// Persian personality system prompt and reply to the triggering message. We also
-// keep the milestone-3 behaviour of recording the sender's PROFILE item.
+// Milestone 5: every visible message is appended to a small rolling per-chat
+// buffer. When the bot is addressed, it assembles tight context (the last few
+// messages + the speaker's profile snippet) and replies — never full history.
 //
 // Secrets come from environment variables, never from a committed file:
 //   - TELEGRAM_SECRET_TOKEN verifies the webhook header.
@@ -11,7 +11,7 @@
 //     Telegram @username, used to detect mentions.
 //   - DDB_TABLE_NAME is the single DynamoDB table.
 
-import { recordSighting, getProfile } from "./db.js";
+import { recordSighting, recordMessage } from "./db.js";
 import { generateReply } from "./bedrock.js";
 import { sendMessage } from "./telegram.js";
 
@@ -88,6 +88,25 @@ export const handler = async (event) => {
   // Only plain messages can mention or reply to the bot. Edited messages and
   // other update kinds are ignored.
   const message = update?.message;
+  const messageText = message?.text ?? message?.caption ?? "";
+
+  // Code-owned structure: append every visible message to the rolling per-chat
+  // buffer (privacy mode is off, so we see them all). This is what lets us
+  // assemble recent context later without ever sending full history.
+  let recentMessages = null;
+  if (message?.chat?.id && message?.from) {
+    try {
+      recentMessages = await recordMessage(
+        message.chat.id,
+        message.from,
+        messageText
+      );
+    } catch (err) {
+      // A storage hiccup must not turn into a Telegram retry storm.
+      console.error("Failed to record recent message:", err?.message);
+    }
+  }
+
   if (!shouldRespond(message, process.env.BOT_USERNAME)) {
     // Not addressed to us — stay silent but acknowledge the webhook.
     return ok;
@@ -95,22 +114,24 @@ export const handler = async (event) => {
 
   console.log("Bot was addressed (mention or reply); generating a reply.");
 
-  // Code-owned structure: record the sender into their PROFILE item and read it
-  // back by numeric user_id. (Profile-aware context is a later milestone.)
+  // Record the sender into their PROFILE item (code-owned, keyed by numeric
+  // user_id) and use the returned profile to build a short context snippet.
+  let profileSnippet = "";
   try {
-    await recordSighting(message.from);
-    const profile = await getProfile(message.from.id);
-    console.log("Profile after sighting:", JSON.stringify(profile));
+    const profile = await recordSighting(message.from);
+    const name = profile?.names_seen?.[0] ?? "";
+    // For now `summary` is empty (filled by the later summarization milestone);
+    // the name alone still tells the model who it is replying to.
+    profileSnippet = [name, profile?.summary].filter(Boolean).join(" — ");
   } catch (err) {
-    // A storage hiccup must not turn into a Telegram retry storm.
     console.error("Failed to record/read profile:", err?.message);
   }
 
-  // Generate an in-character Persian reply and send it back, threaded under the
-  // triggering message. Errors are swallowed so Telegram does not retry.
+  // Generate an in-character Persian reply from the assembled context and send
+  // it back, threaded under the triggering message. Errors are swallowed so
+  // Telegram does not retry.
   try {
-    const userText = message.text ?? message.caption ?? "";
-    const reply = await generateReply(userText);
+    const reply = await generateReply({ recentMessages, profileSnippet });
     if (reply) {
       await sendMessage(message.chat.id, reply, message.message_id);
     }

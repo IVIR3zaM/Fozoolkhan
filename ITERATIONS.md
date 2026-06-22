@@ -28,7 +28,7 @@ Mark done by changing `[ ]` to `[x]`.
   reply to the triggering message. `max_tokens` capped.
   **Done when:** the bot replies in-character in Persian to a mention.
 
-- [ ] **(5) Context assembly**
+- [x] **(5) Context assembly**
   Send the last `CONTEXT_MESSAGE_COUNT` (4–5) messages + the person's profile
   snippet, nothing more.
   **Done when:** replies reflect recent context and the relevant profile, with
