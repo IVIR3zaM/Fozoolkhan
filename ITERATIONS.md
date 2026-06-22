@@ -7,7 +7,7 @@ Mark done by changing `[ ]` to `[x]`.
 
 ---
 
-- [ ] **(1) Lambda + Function URL echoing the webhook**
+- [x] **(1) Lambda + Function URL echoing the webhook**
   Deploy a Lambda with a Function URL that accepts a Telegram webhook POST,
   parses the update, and returns `200`. Log the parsed update.
   **Done when:** a real Telegram message to the bot hits the Lambda and the
