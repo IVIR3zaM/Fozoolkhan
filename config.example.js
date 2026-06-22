@@ -29,4 +29,9 @@ export const config = {
   // (e.g. process.env.TELEGRAM_SECRET_TOKEN) and used to verify incoming
   // webhook requests. Do not commit the real token.
   TELEGRAM_SECRET_TOKEN: "set-via-environment-variable",
+
+  // Placeholder ONLY. The bot token from @BotFather, read from an environment
+  // variable (process.env.TELEGRAM_BOT_TOKEN) to authenticate outgoing Bot API
+  // calls (e.g. sending replies). Do not commit the real token.
+  TELEGRAM_BOT_TOKEN: "set-via-environment-variable",
 };

@@ -23,7 +23,7 @@ Mark done by changing `[ ]` to `[x]`.
   Create/connect the single table. Write and read a `USER#<uid> / PROFILE` item.
   **Done when:** a profile item can be written and read back by `user_id`.
 
-- [ ] **(4) Bedrock call with personality system prompt**
+- [x] **(4) Bedrock call with personality system prompt**
   Call Claude Haiku via Bedrock with the Persian personality system prompt and
   reply to the triggering message. `max_tokens` capped.
   **Done when:** the bot replies in-character in Persian to a mention.

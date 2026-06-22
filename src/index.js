@@ -1,16 +1,19 @@
 // Lambda handler for فضول‌خان (Fozoolkhan).
 //
-// Milestone 3: on an addressed message, record the sender's PROFILE item in
-// DynamoDB and read it back (anchored to the numeric user_id). Replying is still
-// a later milestone.
+// Milestone 4: on an addressed message, call Claude Haiku via Bedrock with the
+// Persian personality system prompt and reply to the triggering message. We also
+// keep the milestone-3 behaviour of recording the sender's PROFILE item.
 //
 // Secrets come from environment variables, never from a committed file:
 //   - TELEGRAM_SECRET_TOKEN verifies the webhook header.
+//   - TELEGRAM_BOT_TOKEN authenticates outgoing Bot API calls.
 //   - BOT_USERNAME (not a secret, but kept in env to match) is the bot's
 //     Telegram @username, used to detect mentions.
 //   - DDB_TABLE_NAME is the single DynamoDB table.
 
 import { recordSighting, getProfile } from "./db.js";
+import { generateReply } from "./bedrock.js";
+import { sendMessage } from "./telegram.js";
 
 // Telegram sends this header on every webhook request when a secret token is
 // configured. Function URL lowercases all header names.
@@ -90,10 +93,10 @@ export const handler = async (event) => {
     return ok;
   }
 
-  console.log("Bot was addressed (mention or reply); will respond later.");
+  console.log("Bot was addressed (mention or reply); generating a reply.");
 
   // Code-owned structure: record the sender into their PROFILE item and read it
-  // back by numeric user_id. (Replying is a later milestone.)
+  // back by numeric user_id. (Profile-aware context is a later milestone.)
   try {
     await recordSighting(message.from);
     const profile = await getProfile(message.from.id);
@@ -101,6 +104,18 @@ export const handler = async (event) => {
   } catch (err) {
     // A storage hiccup must not turn into a Telegram retry storm.
     console.error("Failed to record/read profile:", err?.message);
+  }
+
+  // Generate an in-character Persian reply and send it back, threaded under the
+  // triggering message. Errors are swallowed so Telegram does not retry.
+  try {
+    const userText = message.text ?? message.caption ?? "";
+    const reply = await generateReply(userText);
+    if (reply) {
+      await sendMessage(message.chat.id, reply, message.message_id);
+    }
+  } catch (err) {
+    console.error("Failed to generate/send reply:", err?.message);
   }
 
   return ok;
