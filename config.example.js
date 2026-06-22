@@ -35,6 +35,14 @@ export const config = {
   // The bot's Telegram username (without @), used to detect mentions.
   BOT_USERNAME: "fozoolkhan",
 
+  // ACCESS CONTROL: the admin's numeric Telegram user id. The bot answers only
+  // this user in private chats, DMs them to approve any group the bot is added
+  // to, and only this user can tap the approve/deny buttons. Get it by messaging
+  // @userinfobot, or read it from the Lambda logs (`message.from.id`). The admin
+  // must have started a private chat with the bot first, or the approval DM
+  // can't be delivered.
+  ADMIN_USER_ID: "123456789",
+
   // DynamoDB single-table name.
   DDB_TABLE_NAME: "fozoolkhan",
 

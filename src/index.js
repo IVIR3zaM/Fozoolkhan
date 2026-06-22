@@ -23,10 +23,12 @@ import {
   appendObservation,
   getObservations,
   setProfileSummary,
+  getChatAccess,
+  setChatAccess,
 } from "./db.js";
 import { resolveName, describeAmbiguity, learnFromMessage } from "./names.js";
 import { generateReply, summarizeObservations } from "./bedrock.js";
-import { sendMessage } from "./telegram.js";
+import { sendMessage, answerCallbackQuery } from "./telegram.js";
 
 // How many observations accumulate before the occasional summarization step
 // folds them into a person's profile summary. Frugal: summarization is itself a
@@ -82,16 +84,205 @@ const SECRET_TOKEN_HEADER = "x-telegram-bot-api-secret-token";
 // A plain 200 with no body. Telegram only cares that we answered 2xx quickly.
 const ok = { statusCode: 200, body: "" };
 
+// -----------------------------------------------------------------------------
+// ACCESS CONTROL (token guard #1, before the spend guard).
+//
+// The bot is inert by default so strangers can't burn tokens:
+//   - Private chats: only the admin (ADMIN_USER_ID) is answered. Everyone else
+//     is ignored silently — no Bedrock, no storage.
+//   - Groups: a group stays inert until the admin approves it. When the bot is
+//     added to a group we DM the admin approve/deny buttons; only the approved
+//     status unlocks recording/learning/replies for that group.
+// ADMIN_USER_ID is the admin's numeric Telegram user id (a private chat's id
+// equals the user's id, so it also works as the DM target).
+// -----------------------------------------------------------------------------
+
+// True when the given id is the configured admin. String-compared because env
+// vars are strings and Telegram ids arrive as numbers.
+const isAdmin = (userId) =>
+  Boolean(process.env.ADMIN_USER_ID) &&
+  String(userId) === String(process.env.ADMIN_USER_ID);
+
+// Pre-written Persian lines for the access-control flow (no Bedrock involved).
+const ASK_APPROVAL = (title) =>
+  `یکی منو به گروه «${title}» اضافه کرد. اینجا فعال باشم؟`;
+const GROUP_APPROVED = "خب، از این به بعد اینجام؛ حواسم بهتون هست 😎";
+const CB_APPROVED = "فعال شد ✅";
+const CB_DENIED = "باشه، ساکت می‌مونم.";
+const CB_NOT_ADMIN = "این دکمه مال تو نیست 😅";
+
+// Inline keyboard for the admin's approve/deny DM. callback_data carries the
+// target chat id (well under Telegram's 64-byte limit).
+const approvalKeyboard = (chatId) => ({
+  inline_keyboard: [
+    [
+      { text: "✅ آره، فعال شو", callback_data: `approve:${chatId}` },
+      { text: "❌ نه", callback_data: `deny:${chatId}` },
+    ],
+  ],
+});
+
 /**
- * Decide whether the bot should respond to a message. True only when the bot
- * was @-mentioned by username, or the message is a reply to one of the bot's
- * own messages. Everything else is ignored.
+ * Authorization gate for an incoming message. Private → admin only. Group/
+ * supergroup → only when that chat has been approved. Anything else (channels)
+ * is not served.
+ *
+ * @param {object} message  Telegram `message` object.
+ * @returns {Promise<boolean>}
+ */
+const isMessageAuthorized = async (message) => {
+  const type = message?.chat?.type;
+  if (type === "private") return isAdmin(message.from?.id);
+  if (type === "group" || type === "supergroup") {
+    const access = await getChatAccess(message.chat.id);
+    return access?.status === "approved";
+  }
+  return false;
+};
+
+/**
+ * Handle a `my_chat_member` update — the bot's own membership changing. When the
+ * bot is freshly added to a group we mark it pending and DM the admin to confirm
+ * (unless it's already approved). When removed, we mark it removed.
+ *
+ * @param {object} myChatMember  Telegram `my_chat_member` update.
+ */
+const handleMembershipChange = async (myChatMember) => {
+  const chat = myChatMember?.chat;
+  if (chat?.type !== "group" && chat?.type !== "supergroup") return;
+
+  const status = myChatMember?.new_chat_member?.status;
+  const added = status === "member" || status === "administrator";
+  const removed = status === "left" || status === "kicked";
+
+  if (added) {
+    const existing = await getChatAccess(chat.id);
+    if (existing?.status === "approved") return; // re-added to a known group.
+    await setChatAccess(chat.id, "pending", chat.title);
+    await sendMessage(
+      process.env.ADMIN_USER_ID,
+      ASK_APPROVAL(chat.title ?? chat.id),
+      undefined,
+      approvalKeyboard(chat.id)
+    );
+  } else if (removed) {
+    await setChatAccess(chat.id, "removed", chat.title);
+  }
+};
+
+/**
+ * Handle a tapped approve/deny button. Only the admin may act; the chosen status
+ * is written and the admin gets a toast. On approval the group is greeted.
+ *
+ * @param {object} callbackQuery  Telegram `callback_query` update.
+ */
+const handleCallbackQuery = async (callbackQuery) => {
+  if (!isAdmin(callbackQuery?.from?.id)) {
+    await answerCallbackQuery(callbackQuery.id, CB_NOT_ADMIN);
+    return;
+  }
+
+  const [action, chatId] = String(callbackQuery.data ?? "").split(":");
+  if (!chatId) {
+    await answerCallbackQuery(callbackQuery.id);
+    return;
+  }
+
+  if (action === "approve") {
+    await setChatAccess(chatId, "approved");
+    await answerCallbackQuery(callbackQuery.id, CB_APPROVED);
+    try {
+      await sendMessage(chatId, GROUP_APPROVED);
+    } catch (err) {
+      console.error("Failed to greet approved group:", err?.message);
+    }
+  } else {
+    await setChatAccess(chatId, "denied");
+    await answerCallbackQuery(callbackQuery.id, CB_DENIED);
+  }
+};
+
+// Pre-written Persian lines for the admin slash-command fallback.
+const CMD_APPROVED = "فعال شد ✅ از این به بعد اینجا هستم.";
+const CMD_DENIED = "باشه، اینجا ساکت می‌مونم.";
+const CMD_NEED_ID = "از داخل خود گروه بزن، یا: /approve <chat_id>";
+
+/**
+ * Parse a slash-command, tolerating Telegram's `/cmd@botname` form and an
+ * optional argument. Returns null if the text isn't a command.
+ *
+ * @param {string} text  Message text or caption.
+ * @returns {{cmd: string, arg: string}|null}
+ */
+const parseCommand = (text) => {
+  const m = String(text ?? "")
+    .trim()
+    .match(/^\/([a-z_]+)(?:@\w+)?(?:\s+(.*))?$/i);
+  if (!m) return null;
+  return { cmd: m[1].toLowerCase(), arg: (m[2] ?? "").trim() };
+};
+
+/**
+ * Admin slash-command fallback for the button flow — reliable even if the
+ * `my_chat_member` approval DM was never delivered (e.g. webhook misconfigured
+ * at add-time). Only the admin acts. In a group `/approve` and `/deny` target
+ * the current chat; from a DM they take an explicit `<chat_id>` argument. This
+ * runs before the access gate so it works in a not-yet-approved group.
+ *
+ * @param {object} message  Telegram `message` object.
+ * @returns {Promise<boolean>} True if the message was an admin command we acted on.
+ */
+const handleAdminCommand = async (message) => {
+  if (!isAdmin(message?.from?.id)) return false;
+  const parsed = parseCommand(message.text ?? message.caption);
+  if (!parsed || (parsed.cmd !== "approve" && parsed.cmd !== "deny")) {
+    return false;
+  }
+
+  const type = message.chat?.type;
+  const inGroup = type === "group" || type === "supergroup";
+  const targetId = inGroup ? message.chat.id : parsed.arg;
+  const title = inGroup ? message.chat.title : undefined;
+
+  if (!targetId) {
+    await sendMessage(message.chat.id, CMD_NEED_ID, message.message_id);
+    return true;
+  }
+
+  const status = parsed.cmd === "approve" ? "approved" : "denied";
+  await setChatAccess(targetId, status, title);
+  await sendMessage(
+    message.chat.id,
+    status === "approved" ? CMD_APPROVED : CMD_DENIED,
+    message.message_id
+  );
+
+  // Approving from a DM by id: greet the target group too.
+  if (status === "approved" && String(targetId) !== String(message.chat.id)) {
+    try {
+      await sendMessage(targetId, GROUP_APPROVED);
+    } catch (err) {
+      console.error("Failed to greet approved group:", err?.message);
+    }
+  }
+  return true;
+};
+
+/**
+ * Decide whether the bot should respond to a message. In a private chat (only
+ * reachable by the admin past the access gate) every message is answered. In
+ * groups, true only when the bot was @-mentioned by username, or the message is
+ * a reply to one of the bot's own messages. Everything else is ignored.
  *
  * @param {object} message  Telegram `message` object.
  * @param {string} botUsername  The bot's @username (without the leading @).
  */
 const shouldRespond = (message, botUsername) => {
   if (!message || !botUsername) return false;
+
+  // Private chats are admin-only by the time we get here, so answer directly —
+  // no @-mention needed when you're DMing your own bot.
+  if (message.chat?.type === "private") return true;
 
   // Reply to one of the bot's messages. The bot is identified by its username
   // on the replied-to message's author.
@@ -145,10 +336,42 @@ export const handler = async (event) => {
 
   console.log("Telegram update:", JSON.stringify(update));
 
+  // ACCESS CONTROL routing (before any work). The bot's own membership changing
+  // drives the approval flow; tapped approve/deny buttons resolve it. Both are
+  // delivered by Telegram's default webhook update set.
+  try {
+    if (update?.my_chat_member) {
+      await handleMembershipChange(update.my_chat_member);
+      return ok;
+    }
+    if (update?.callback_query) {
+      await handleCallbackQuery(update.callback_query);
+      return ok;
+    }
+  } catch (err) {
+    console.error("Access-control routing failed:", err?.message);
+    return ok;
+  }
+
   // Only plain messages can mention or reply to the bot. Edited messages and
   // other update kinds are ignored.
   const message = update?.message;
   const messageText = message?.text ?? message?.caption ?? "";
+
+  // Admin slash-command fallback (/approve, /deny). Runs before the gate so the
+  // admin can approve a not-yet-approved group from inside it.
+  try {
+    if (message && (await handleAdminCommand(message))) return ok;
+  } catch (err) {
+    console.error("Admin command failed:", err?.message);
+    return ok;
+  }
+
+  // ACCESS GATE: unauthorized senders (non-admin DMs, unapproved groups) get no
+  // work at all — no recording, no learning, no Bedrock. Stay silent but ack.
+  if (!message || !(await isMessageAuthorized(message))) {
+    return ok;
+  }
 
   // Code-owned structure: append every visible message to the rolling per-chat
   // buffer (privacy mode is off, so we see them all). This is what lets us

@@ -47,6 +47,16 @@ variable "bot_username" {
   default     = "fozoolkhan"
 }
 
+variable "admin_user_id" {
+  description = <<-EOT
+    The admin's numeric Telegram user id. Access control: the bot answers only
+    this user in private chats, DMs them to approve any group it's added to, and
+    only this user can approve/deny groups. Find it via @userinfobot. The admin
+    must DM the bot once so the approval message can be delivered.
+  EOT
+  type        = string
+}
+
 # ---- Bedrock model ----------------------------------------------------------
 
 variable "bedrock_model_id" {

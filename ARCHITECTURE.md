@@ -36,6 +36,7 @@ labels that point at an id.
 | `USERNAME#<username>` | `OWNER` | numeric `user_id` that currently owns this @username (1:1; lets a bare `@username` mention become an edge) |
 | `EDGE#<uid_a>` | `USER#<uid_b>` | `count` of how often A talks with/about B |
 | `BUDGET` | `MONTH#<YYYY-MM>` | running monthly spend estimate (see cost control) |
+| `CHAT#<chatId>` | `ACCESS` | allowlist `status` (pending/approved/denied/removed) + group title (see access control) |
 
 All writes to structured items (`NAME#`, `EDGE#`, `BUDGET`, profile structure)
 are done by code. The LLM's output only ever lands in `OBS#` lines and, via the
@@ -49,7 +50,13 @@ Telegram update
    ▼
 Lambda (Function URL)
    1. Verify Telegram secret token header. Reject otherwise.
+   1b. ACCESS CONTROL (token guard, before any work):
+        - my_chat_member (added to a group) → mark CHAT# pending, DM the admin
+          approve/deny buttons. callback_query → only the admin may resolve it.
+        - Private chat → answer only ADMIN_USER_ID. Group → only if its CHAT#
+          ACCESS status is approved. Unauthorized → 200 OK, no record/learn/LLM.
    2. Parse update. Should we respond?
+        - private chat (admin only past the gate) → always, OR
         - bot was @-mentioned, OR
         - message is a reply to one of the bot's messages.
       If not → 200 OK, do nothing.

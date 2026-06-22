@@ -11,6 +11,11 @@ telegram_bot_token = "123456:ABC-DEF_your_bot_token_here"
 # The bot's @username (without @), used to detect mentions.
 bot_username = "fozoolkhan"
 
+# Required: your numeric Telegram user id (access control). The bot answers only
+# you in private chats and asks you to approve any group it's added to. Get it
+# from @userinfobot, and DM the bot once so it can message you.
+admin_user_id = "123456789"
+
 # --- usually fine as defaults ---
 # aws_region  = "eu-central-1"   # Frankfurt
 # aws_profile = "personal"

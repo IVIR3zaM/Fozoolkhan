@@ -164,6 +164,7 @@ resource "aws_lambda_function" "bot" {
       TELEGRAM_BOT_TOKEN              = var.telegram_bot_token
       TELEGRAM_SECRET_TOKEN           = local.secret_token
       BOT_USERNAME                    = var.bot_username
+      ADMIN_USER_ID                   = var.admin_user_id
       BEDROCK_MODEL_ID                = var.bedrock_model_id
       MAX_RESPONSE_TOKENS             = tostring(var.max_response_tokens)
       MONTHLY_BUDGET_EUR              = tostring(var.monthly_budget_eur)

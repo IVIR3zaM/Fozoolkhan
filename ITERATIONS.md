@@ -56,3 +56,10 @@ Mark done by changing `[ ]` to `[x]`.
   Increment `EDGE#<a> → b` when A addresses/replies to B.
   **Done when:** repeated interactions raise the edge count and measurably bias
   name resolution.
+
+- [x] **(10) Access control / allowlist**
+  The bot is inert by default. Private chats answer only `ADMIN_USER_ID`; a group
+  stays inert until the admin approves it (`CHAT#<id> / ACCESS`). Being added to a
+  group DMs the admin approve/deny buttons; only the admin may resolve them.
+  **Done when:** strangers get no reply (no Bedrock, no storage), and a group
+  only becomes functional after the admin taps approve.

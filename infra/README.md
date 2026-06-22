@@ -50,17 +50,23 @@ BOT_TOKEN='<from BotFather>'
 URL="$(terraform output -raw function_url)"
 SECRET="$(terraform output -raw telegram_secret_token)"
 
+# allowed_updates MUST include my_chat_member (the add-to-group event that
+# triggers the admin approval DM) and callback_query (the approve/deny buttons).
+# With only ["message"], access control can never prompt for approval.
 curl -s "https://api.telegram.org/bot${BOT_TOKEN}/setWebhook" \
   -d "url=${URL}" \
   -d "secret_token=${SECRET}" \
-  --data-urlencode "allowed_updates=[\"message\"]"
+  --data-urlencode "allowed_updates=[\"message\",\"my_chat_member\",\"callback_query\"]"
 
 curl -s "https://api.telegram.org/bot${BOT_TOKEN}/getWebhookInfo"
 ```
 
 ## Test in the real world
 
-1. Add the bot to a Telegram group (or DM it).
+1. Add the bot to a Telegram group (or DM it). The admin gets a DM with
+   approve/deny buttons. (DM the bot once first, or it can't message you.)
+   Fallback if the DM never arrives: as the admin, type `/approve` in the group
+   (or `/approve <chat_id>` from your DM with the bot).
 2. `@your_bot_username سلام` — it should reply in Persian, threaded.
 3. Reply to one of its messages — it should reply again.
 4. Send unrelated messages — it should stay silent.

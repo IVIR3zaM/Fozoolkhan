@@ -44,6 +44,11 @@ const recentKey = (chatId) => ({ PK: `CHAT#${chatId}`, SK: "RECENT" });
 // resets naturally at month rollover (no cron, no cleanup).
 const budgetKey = (month) => ({ PK: "BUDGET", SK: `MONTH#${month}` });
 
+// Primary key for a chat's access record. Code-owned allowlist: a group is inert
+// until the admin approves it. `status` is one of pending | approved | denied |
+// removed (see ACCESS CONTROL in index.js). Anchored to the numeric chat id.
+const chatAccessKey = (chatId) => ({ PK: `CHAT#${chatId}`, SK: "ACCESS" });
+
 // The current month as `YYYY-MM` (UTC), matching the BUDGET item's SK.
 export const currentMonth = () => new Date().toISOString().slice(0, 7);
 
@@ -188,6 +193,51 @@ export const recordMessage = async (chatId, from, text) => {
   );
 
   return recent;
+};
+
+/**
+ * Read a chat's access record, or null if we've never seen this chat. Code-owned
+ * allowlist state — the gate the handler reads before doing any work for a group.
+ *
+ * @param {number|string} chatId  Numeric Telegram chat id.
+ * @returns {Promise<object|null>} The access item, or null if none exists.
+ */
+export const getChatAccess = async (chatId) => {
+  if (!chatId) return null;
+  const { Item } = await docClient.send(
+    new GetCommand({ TableName: tableName(), Key: chatAccessKey(chatId) })
+  );
+  return Item ?? null;
+};
+
+/**
+ * Set a chat's access status (and optionally its title). Code-owned, structure
+ * only: an Update so flipping the status never wipes a previously stored title.
+ * `status` is reserved in DynamoDB, hence the `#s` alias.
+ *
+ * @param {number|string} chatId  Numeric Telegram chat id.
+ * @param {string} status  pending | approved | denied | removed.
+ * @param {string} [title]  The chat's title, stored for the admin's prompt.
+ */
+export const setChatAccess = async (chatId, status, title) => {
+  if (!chatId || !status) return;
+  const names = { "#s": "status" };
+  const values = { ":s": status, ":t": new Date().toISOString() };
+  let expr = "SET #s = :s, last_updated = :t";
+  if (title) {
+    names["#title"] = "title";
+    values[":title"] = title;
+    expr += ", #title = :title";
+  }
+  await docClient.send(
+    new UpdateCommand({
+      TableName: tableName(),
+      Key: chatAccessKey(chatId),
+      UpdateExpression: expr,
+      ExpressionAttributeNames: names,
+      ExpressionAttributeValues: values,
+    })
+  );
 };
 
 /**
