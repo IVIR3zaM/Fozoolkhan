@@ -183,6 +183,25 @@ resource "aws_lambda_function_url" "bot" {
   authorization_type = "NONE"
 }
 
+# A Function URL with NONE auth needs explicit resource-based permissions for the
+# public principal. Most accounts need only InvokeFunctionUrl, but this account
+# (verified empirically — the console flags it) also requires InvokeFunction;
+# without BOTH, every request (including Telegram's) gets a 403.
+resource "aws_lambda_permission" "function_url" {
+  statement_id           = "AllowPublicFunctionUrlInvoke"
+  action                 = "lambda:InvokeFunctionUrl"
+  function_name          = aws_lambda_function.bot.function_name
+  principal              = "*"
+  function_url_auth_type = "NONE"
+}
+
+resource "aws_lambda_permission" "function_invoke" {
+  statement_id  = "AllowPublicInvokeFunction"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.bot.function_name
+  principal     = "*"
+}
+
 # -----------------------------------------------------------------------------
 # AWS Budgets alert (optional — created only if an email is supplied). A
 # notification layer; the in-code spend guard is the real brake.
