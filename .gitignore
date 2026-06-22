@@ -8,3 +8,13 @@ config.js
 .DS_Store
 dist/
 *.zip
+
+# Terraform
+infra/.terraform/
+infra/build/
+infra/lambda.zip
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+*.auto.tfvars
+.terraform.tfstate.lock.info

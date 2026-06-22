@@ -1,0 +1,23 @@
+# Copy to terraform.tfvars (gitignored) and fill in. Secrets here NEVER get
+# committed. You can also supply them as env vars: TF_VAR_telegram_bot_token=...
+
+# Required: bot token from @BotFather.
+telegram_bot_token = "123456:ABC-DEF_your_bot_token_here"
+
+# Optional: leave unset to have Terraform generate a strong secret token
+# (read it afterward with: terraform output -raw telegram_secret_token).
+# telegram_secret_token = ""
+
+# The bot's @username (without @), used to detect mentions.
+bot_username = "fozoolkhan"
+
+# --- usually fine as defaults ---
+# aws_region  = "eu-central-1"   # Frankfurt
+# aws_profile = "personal"
+
+# Model: Claude Haiku 4.5 via the EU inference profile — the only working Haiku
+# in Frankfurt (3.5 Haiku isn't in the EU; 3 Haiku is Legacy/access-denied).
+# bedrock_model_id = "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+# Optional AWS Budgets email alert (50/80/100%). Leave empty to skip.
+# budget_alert_email = "you@example.com"
