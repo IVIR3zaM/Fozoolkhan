@@ -13,7 +13,7 @@ Mark done by changing `[ ]` to `[x]`.
   **Done when:** a real Telegram message to the bot hits the Lambda and the
   update appears in CloudWatch logs.
 
-- [ ] **(2) Respond only on mention / reply**
+- [x] **(2) Respond only on mention / reply**
   Detect whether the bot was `@`-mentioned or replied to. Ignore everything
   else (still return `200`).
   **Done when:** the bot reacts only to mentions/replies and stays silent
