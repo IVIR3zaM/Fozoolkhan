@@ -27,10 +27,12 @@ import {
   getChatAccess,
   setChatAccess,
   listChatAccess,
+  bumpNameWeight,
+  normalizeName,
   currentMonth,
 } from "./db.js";
 import {
-  resolveName,
+  resolveSubjects,
   resolveObservationTarget,
   describeAmbiguity,
   learnFromMessage,
@@ -100,10 +102,109 @@ const rememberObservations = async (speaker, observations, monthlyBudget) => {
   await maybeSummarize(speaker?.id, monthlyBudget);
 };
 
+// How many unresolved spoken names to hand the model for coreference, and the
+// weight a model-grounded alias earns. The alias weight matches a single hard
+// addressing signal (a first_name sighting): the model only answers when it's
+// confident the name belongs to someone present, so it's a strong signal — but
+// not so large that one wrong grounding can't be out-weighed by real usage.
+const MAX_UNRESOLVED_NAMES = 3;
+const ALIAS_LEARN_WEIGHT = 1;
+
+/**
+ * Build a code-owned map from a present participant's display label to their
+ * numeric id, drawn from the recent-message buffer (which carries ids code-side)
+ * and the replied-to author. This is what lets LLM coreference (Layer 2) be
+ * grounded: the model returns a display label, code turns it into an id. A label
+ * shared by two different ids is dropped (null) — we never guess which one.
+ *
+ * @param {Array<{name?: string, user_id?: number|string, self?: boolean}>} recentMessages
+ * @param {object} [repliedToFrom]  Telegram `from` of the replied-to message.
+ * @returns {Map<string, number|string|null>} normalized label -> id (null if clashing).
+ */
+export const buildParticipantIndex = (recentMessages, repliedToFrom) => {
+  const map = new Map();
+  const add = (label, id) => {
+    const key = normalizeName(label);
+    if (!key || !id) return;
+    if (map.has(key) && String(map.get(key)) !== String(id)) {
+      map.set(key, null); // same label, two people — ambiguous, don't ground.
+      return;
+    }
+    map.set(key, id);
+  };
+  for (const m of recentMessages ?? []) {
+    if (!m?.self) add(m?.name, m?.user_id);
+  }
+  if (repliedToFrom) {
+    add(
+      [repliedToFrom.first_name, repliedToFrom.last_name]
+        .filter(Boolean)
+        .join(" "),
+      repliedToFrom.id,
+    );
+  }
+  return map;
+};
+
+/**
+ * Persist the LLM's coreference answers (Layer 2): for each alias the model
+ * returned, map its display label back to a numeric id from the participant index
+ * and bump `NAME#<spokenName> → id`. Code owns the write; the model only supplied
+ * the (spoken name, label) pair. Unknown or clashing labels are skipped so we
+ * never learn an alias we can't pin to one id.
+ *
+ * @param {Array<{name: string, label: string}>} aliases
+ * @param {Map<string, number|string|null>} participants
+ */
+const rememberAliases = async (aliases, participants) => {
+  for (const { name, label } of aliases ?? []) {
+    const id = participants.get(normalizeName(label));
+    if (!id) continue; // unknown label, or a clashing one (null).
+    await bumpNameWeight(name, id, ALIAS_LEARN_WEIGHT);
+  }
+};
+
 // Build a short context snippet from a profile: a name label plus the free-text
 // summary (still empty until the summarization milestone). Code-owned structure.
 const snippetOf = (profile) =>
   [profile?.names_seen?.[0], profile?.summary].filter(Boolean).join(" — ");
+
+// How many raw observations to fall back to when a subject has no summary yet.
+// Kept small so the snippet stays token-frugal (a hard rule — see AGENTS.md).
+export const SUBJECT_OBS_FALLBACK = 5;
+
+// Snippet for the person the asker is *asking about*. Prefer the compressed
+// summary, but the summarizer only runs once a threshold of observations has
+// accumulated — so until then the summary is empty and the bot would answer with
+// no memory of someone it has actually been learning about. When there's no
+// summary yet, fall back to that person's most recent raw observations so the
+// model has real context the moment any observation exists. Pure: the handler
+// does the (single, asking-about-someone-only) observations read and passes the
+// lines in.
+//
+// @param {object} subject  The subject's PROFILE item.
+// @param {string[]} [observations]  Their raw OBS# lines (oldest first).
+// @returns {string}
+export const subjectSnippet = (subject, observations = []) => {
+  if (subject?.summary || !observations.length) return snippetOf(subject);
+  return [
+    subject?.names_seen?.[0],
+    observations.slice(-SUBJECT_OBS_FALLBACK).join("؛ "),
+  ]
+    .filter(Boolean)
+    .join(" — ");
+};
+
+// Read one resolved subject's context from the DB and render its snippet. The
+// raw observations are only fetched when the summary is empty (the summarizer
+// hasn't folded them in yet), so the common path stays a single read. Returns
+// "" when the person has no profile.
+const loadSubjectSnippet = async (userId) => {
+  const subject = await getProfile(userId);
+  if (!subject) return "";
+  const obs = subject.summary ? [] : await getObservations(userId);
+  return subjectSnippet(subject, obs);
+};
 
 // Pre-written Persian "broke until next month" line. Sent when the monthly
 // spend guard trips, instead of calling Bedrock. Funny, never apologetic.
@@ -576,6 +677,7 @@ export const debugLine = (m) =>
  * @param {object} [args.replyTo]  The replied-to message context, if any.
  * @param {string} args.profileSnippet  The snippet that would be sent to the model.
  * @param {string} args.nameNote  The ambiguity note, if any.
+ * @param {string[]} [args.unresolvedNames]  Names handed to the model for coreference.
  */
 const runDebug = async ({
   message,
@@ -585,6 +687,7 @@ const runDebug = async ({
   replyTo,
   profileSnippet,
   nameNote,
+  unresolvedNames,
 }) => {
   const speakerId = message.from?.id;
   const sections = ["🐞 حالت دیباگ — هیچی ذخیره نمی‌شه\n"];
@@ -600,6 +703,9 @@ const runDebug = async ({
       `خلاصه‌ی فعلیِ گوینده: ${speaker?.summary || "—"}`,
       `name resolution: ${resolution ? JSON.stringify(resolution) : "—"}`,
       `nameNote: ${nameNote || "—"}`,
+      `unresolvedNames (به مدل برای coreference): ${
+        unresolvedNames?.length ? unresolvedNames.join(", ") : "—"
+      }`,
       `profileSnippet (که به مدل می‌ره): ${profileSnippet || "—"}`,
       `خرج این ماه: ${spent.toFixed(4)} از ${Number(
         process.env.MONTHLY_BUDGET_EUR ?? 5,
@@ -621,8 +727,24 @@ const runDebug = async ({
     replyTo,
     profileSnippet,
     nameNote,
+    unresolvedNames,
   });
   await addMonthlySpend(reply.costEur); // honest accounting: the call happened.
+
+  // Show what each coreference alias would ground to — but DON'T persist it.
+  const participants = buildParticipantIndex(
+    recentMessages,
+    message.reply_to_message?.from,
+  );
+  const aliasDump = reply.aliases.length
+    ? reply.aliases
+        .map(({ name, label }) => {
+          const id = participants.get(normalizeName(label));
+          return `${name} = ${label} → ${id ? `id=${id}` : "وصل نشد"}`;
+        })
+        .join(" | ")
+    : "—";
+
   sections.push(
     [
       "== فراخوانِ جواب (REPLY) ==",
@@ -641,6 +763,7 @@ const runDebug = async ({
           ? reply.observations.map((o) => `${o.name} → ${o.note}`).join(" | ")
           : "—"
       }`,
+      `aliases (coreference، ذخیره نشد): ${aliasDump}`,
       `هزینه: ${reply.costEur.toFixed(5)} یورو`,
     ].join("\n"),
   );
@@ -815,29 +938,42 @@ export const handler = async (event) => {
   // Record the sender into their PROFILE item (code-owned, keyed by numeric
   // user_id). By default the snippet describes the speaker so the bot knows who
   // it's replying to. Then run name resolution: if the speaker is asking about
-  // someone by name, swap in that person's profile when we're confident, or hand
-  // the LLM an ambiguity note so the "which one?" becomes the joke.
+  // one or more people by name, swap in those people's profiles when we're
+  // confident, or hand the LLM an ambiguity note so the "which one?" becomes the
+  // joke.
   let profileSnippet = "";
   let nameNote = "";
+  let unresolvedNames = []; // spoken names to hand the model for coreference.
   let speaker = null; // kept for the debug dump (the speaker's full profile).
   let resolution = null; // kept for the debug dump (name-resolution outcome).
   try {
     speaker = await recordSighting(message.from);
     profileSnippet = snippetOf(speaker);
 
-    resolution = await resolveName(
+    // A message can name several people ("حسام و علی رو چی می‌دونی") — resolve
+    // them all and feed each one's context, not just the first match.
+    resolution = await resolveSubjects(
       message.from?.id,
       messageText,
       process.env.BOT_USERNAME,
     );
-    if (
-      resolution.status === "confident" &&
-      resolution.userId !== message.from?.id
-    ) {
-      const subject = await getProfile(resolution.userId);
-      if (subject) profileSnippet = snippetOf(subject);
-    } else if (resolution.status === "ambiguous") {
-      nameNote = await describeAmbiguity(resolution);
+    // Layer 2: only ask the model for coreference when we grounded *nobody* — if
+    // we already know who's meant there's nothing to learn. Capped for frugality.
+    if (!resolution.confident.length) {
+      unresolvedNames = resolution.unresolved.slice(0, MAX_UNRESOLVED_NAMES);
+    }
+    if (resolution.confident.length) {
+      const snippets = [];
+      for (const { userId } of resolution.confident) {
+        const snippet = await loadSubjectSnippet(userId);
+        if (snippet) snippets.push(snippet);
+      }
+      // Replace the speaker-only default with the people actually asked about.
+      if (snippets.length) profileSnippet = snippets.join("\n");
+    } else if (resolution.ambiguous.length) {
+      // No confident subject, but a name matched several people — make the
+      // "which one?" the joke for the first such name.
+      nameNote = await describeAmbiguity(resolution.ambiguous[0]);
     }
   } catch (err) {
     console.error("Failed to resolve/read profile:", err?.message);
@@ -863,6 +999,7 @@ export const handler = async (event) => {
         replyTo,
         profileSnippet,
         nameNote,
+        unresolvedNames,
       });
     } catch (err) {
       console.error("Debug run failed:", err?.message);
@@ -881,11 +1018,12 @@ export const handler = async (event) => {
   // it back, threaded under the triggering message. Errors are swallowed so
   // Telegram does not retry.
   try {
-    const { text, observations, costEur } = await generateReply({
+    const { text, observations, aliases, costEur } = await generateReply({
       recentMessages,
       replyTo,
       profileSnippet,
       nameNote,
+      unresolvedNames,
     });
     // Increment the monthly spend counter after every successful call (the
     // estimated euro cost from the call's token usage).
@@ -909,6 +1047,19 @@ export const handler = async (event) => {
       await rememberObservations(message.from, observations, monthlyBudget);
     } catch (err) {
       console.error("Failed to record observation/summary:", err?.message);
+    }
+
+    // Side effect (Layer 2): learn any coreference aliases the model grounded to a
+    // present participant ("حسن" → the person posting as «Scorpion»). Own try so a
+    // hiccup never looks like a failed reply.
+    try {
+      const participants = buildParticipantIndex(
+        recentMessages,
+        message.reply_to_message?.from,
+      );
+      await rememberAliases(aliases, participants);
+    } catch (err) {
+      console.error("Failed to record name alias:", err?.message);
     }
   } catch (err) {
     console.error("Failed to generate/send reply:", err?.message);

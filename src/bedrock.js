@@ -60,6 +60,71 @@ const SUMMARY_SYSTEM_PROMPT = `تو نکته‌های پراکنده‌ای را
 // so it never shows up in normal Persian chat.
 const OBS_DELIMITER = "###OBS###";
 
+// Delimiter the model puts before its coreference answers (Layer 2): when we
+// couldn't resolve a spoken name, the model may tell us which person *in the
+// transcript* it refers to. Code (not the model) then maps that display label
+// back to a numeric id and writes the alias. Same "never appears in chat" design.
+const ALIAS_DELIMITER = "###ALIAS###";
+
+/**
+ * Parse the coreference block that follows ALIAS_DELIMITER into per-name pairs.
+ * Each line is `spokenName = labelInChat` — the spoken name the asker used, and
+ * the display label of the person in the transcript the model says it refers to.
+ * Code owns turning the label into a numeric id; here we only split the prose.
+ *
+ * @param {string} block  Raw text after the delimiter (may be empty).
+ * @returns {Array<{name: string, label: string}>}
+ */
+export const parseAliasBlock = (block) => {
+  const out = [];
+  for (const rawLine of String(block ?? "").split("\n")) {
+    const line = rawLine.replace(/^[-*•\s]+/, "").trim();
+    if (!line) continue;
+    const idx = line.indexOf("=");
+    if (idx <= 0) continue; // need a non-empty spoken name before the equals.
+    const name = line.slice(0, idx).trim();
+    const label = line.slice(idx + 1).trim();
+    if (name && label) out.push({ name, label });
+    if (out.length >= 4) break; // frugal cap.
+  }
+  return out;
+};
+
+/**
+ * Split a raw completion into the user-facing reply and its two control blocks
+ * (observations, aliases), in whatever order the model emitted them. The reply is
+ * everything before the first delimiter; each block runs from its delimiter to the
+ * next delimiter (or end). A missing delimiter just yields an empty block, so a
+ * control section never leaks into the chat.
+ *
+ * @param {string} raw  The model's raw completion.
+ * @returns {{ text: string, obsBlock: string, aliasBlock: string }}
+ */
+export const splitControlBlocks = (raw) => {
+  const s = String(raw ?? "");
+  const oi = s.indexOf(OBS_DELIMITER);
+  const ai = s.indexOf(ALIAS_DELIMITER);
+
+  const present = [oi, ai].filter((i) => i >= 0);
+  const replyEnd = present.length ? Math.min(...present) : s.length;
+  const text = s.slice(0, replyEnd).trim();
+
+  // A block ends at the next delimiter that starts after it (the other one).
+  const blockFrom = (start, otherStart) => {
+    if (start < 0) return "";
+    const begin =
+      start + (start === oi ? OBS_DELIMITER : ALIAS_DELIMITER).length;
+    const end = otherStart > begin ? otherStart : s.length;
+    return s.slice(begin, end);
+  };
+
+  return {
+    text,
+    obsBlock: blockFrom(oi, ai),
+    aliasBlock: blockFrom(ai, oi),
+  };
+};
+
 /**
  * Parse the observation block that follows OBS_DELIMITER into per-person lines.
  * Each line is `name: note` — `name` is whoever the note is about (the speaker,
@@ -122,6 +187,8 @@ const renderLine = (m) =>
  *   actual referenced post — not just on its own mention.
  * @param {string} [ctx.profileSnippet]
  * @param {string} [ctx.nameNote]  Optional code-owned note (e.g. an ambiguity hint).
+ * @param {string[]} [ctx.unresolvedNames]  Spoken names the code couldn't resolve;
+ *   the model is asked to map them to a person in the transcript (Layer 2).
  * @returns {string}
  */
 export const buildUserContent = ({
@@ -129,6 +196,7 @@ export const buildUserContent = ({
   replyTo,
   profileSnippet,
   nameNote,
+  unresolvedNames,
 } = {}) => {
   const lines = [];
 
@@ -163,6 +231,16 @@ export const buildUserContent = ({
     `بعد از جواب، یه خطِ جدا «${OBS_DELIMITER}» بذار و بعدش — فقط اگه نکته‌ی تازه‌ای بود — برای حافظه‌ی خودت یادداشت کن؛ هر نکته تو یه خط، به شکلِ «اسمِ شخص: نکته». می‌تونی هم درباره‌ی گوینده‌ی پیام بنویسی هم درباره‌ی کسی که توی حرفا ازش اسم برده شده (مثلاً وقتی یکی درباره‌ی یه نفرِ دیگه نظری میده). اگه نکته‌ای نبود، چیزی ننویس. این بخش به کسی نشون داده نمی‌شه.`,
   );
 
+  // Layer 2 (coreference): only when code couldn't resolve a spoken name. Ask the
+  // model to map it to someone *named in the transcript above*, so code can learn
+  // the alias. Kept out of the prompt entirely otherwise (token frugality).
+  if (unresolvedNames?.length) {
+    lines.push("");
+    lines.push(
+      `این اسم‌(ها) رو نشناختم: ${unresolvedNames.join("، ")}. اگه از روی همین گفتگو مطمئنی هرکدوم اسم/لقبِ یکی از همون آدم‌هاست که بالا توی گفتگو حرف زده، یه خطِ جدا «${ALIAS_DELIMITER}» بذار و هرکدوم رو به شکلِ «اسمی که پرسیده شد = همون اسمی که اون آدم توی گفتگو باهاش نوشته شده» بنویس. فقط وقتی مطمئنی؛ وگرنه چیزی ننویس. این بخش هم به کسی نشون داده نمی‌شه.`,
+    );
+  }
+
   return lines.join("\n");
 };
 
@@ -179,9 +257,12 @@ export const buildUserContent = ({
  *   is replying to (the speaker, or the resolved subject of their question).
  * @param {string} [context.nameNote]  Optional code-owned note, e.g. an
  *   ambiguity hint when a spoken name matched several people.
- * @returns {Promise<{text: string, observations: Array<{name: string, note: string}>, costEur: number, systemPrompt: string, userPrompt: string, raw: string}>}
+ * @param {string[]} [context.unresolvedNames]  Spoken names code couldn't resolve;
+ *   the model is asked to map each to a person named in the transcript (Layer 2).
+ * @returns {Promise<{text: string, observations: Array<{name: string, note: string}>, aliases: Array<{name: string, label: string}>, costEur: number, systemPrompt: string, userPrompt: string, raw: string}>}
  *   The bot's Persian reply, zero or more observations each tagged with the spoken
- *   name of the person they're about (code resolves the name to a user id), and an
+ *   name of the person they're about, zero or more coreference aliases (spoken name
+ *   → a display label in the transcript, which code maps to a user id), and an
  *   estimated euro cost (for the monthly spend counter). The exact prompts sent and
  *   the raw completion are also returned, for the admin debug dump.
  */
@@ -203,16 +284,17 @@ export const generateReply = async (context = {}) => {
   const payload = JSON.parse(Buffer.from(response.body).toString("utf8"));
   const { text: raw, costEur } = parseCompletion(payload);
 
-  // Split the user-facing reply from the piggybacked observation block. If the
-  // model omitted the delimiter the whole completion is the reply and there are
-  // no observations — so a missing observation never leaks into the chat.
-  const [replyPart, ...obsParts] = raw.split(OBS_DELIMITER);
-  const text = replyPart.trim();
-  const observations = parseObservationBlock(obsParts.join(OBS_DELIMITER));
+  // Split the user-facing reply from the piggybacked control blocks. If the model
+  // omitted a delimiter that block is empty — so a missing observation or alias
+  // never leaks into the chat.
+  const { text, obsBlock, aliasBlock } = splitControlBlocks(raw);
+  const observations = parseObservationBlock(obsBlock);
+  const aliases = parseAliasBlock(aliasBlock);
 
   return {
     text,
     observations,
+    aliases,
     costEur,
     systemPrompt: SYSTEM_PROMPT,
     userPrompt,

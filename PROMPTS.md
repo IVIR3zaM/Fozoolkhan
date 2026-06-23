@@ -22,20 +22,40 @@ Two kinds of call go to Bedrock. Both send a constant `system` string plus one
      own past lines carry `self: true` and render as `فضول‌خان (خودت):`.
    - `replyTo` — the message the trigger is a reply to (so the bot comments on the
      referenced post, not just on its own mention).
-   - `profileSnippet` — `names_seen[0] — summary` of whoever the bot is addressing
-     (the speaker, or a confidently-resolved subject of their question).
+   - `profileSnippet` — context for whoever the bot is addressing. By default the
+     speaker; when the message names people, the **confidently-resolved subjects**
+     (one line each — a message can ask about several people at once). Each line is
+     `names_seen[0] — summary`, or, when the summarizer hasn't run yet,
+     `names_seen[0] — <recent raw observations>` so a known-but-unsummarized person
+     still reaches the model with real context (`subjectSnippet`).
    - `nameNote` — a code-written hint, e.g. an ambiguity note ("which Ali?").
+   - `unresolvedNames` — only when code resolved **nobody**: up to three spoken
+     names the `NAME#` index didn't recognize, handed to the model for coreference
+     (see below). Omitted entirely otherwise, so a normal reply costs no extra
+     tokens.
      The turn always ends with the reply instruction and the `###OBS###` memory
-     instruction.
+     instruction, plus the `###ALIAS###` coreference instruction when
+     `unresolvedNames` is present.
 
 2. **Summarize** — `summarizeObservations()`, a separate, occasional call that
    folds a person's accumulated one-line observations into their profile summary.
 
-What the model returns on a reply call is split on `###OBS###`: everything before
-is the chat reply; everything after is parsed by `parseObservationBlock()` into
-`name: note` lines. Code (`resolveObservationTarget()`) maps each `name` to a
-numeric `user_id` and appends the note to that person's `OBS#` log — that is how
-the bot learns about someone from what **others** say about them.
+What the model returns on a reply call is split by `splitControlBlocks()` into up
+to three parts: the chat reply (everything before the first delimiter), an
+`###OBS###` memory block, and an `###ALIAS###` coreference block (either block may
+be absent, in any order):
+
+- **`###OBS###`** is parsed by `parseObservationBlock()` into `name: note` lines.
+  Code (`resolveObservationTarget()`) maps each `name` to a numeric `user_id` and
+  appends the note to that person's `OBS#` log — that is how the bot learns about
+  someone from what **others** say about them.
+- **`###ALIAS###`** is parsed by `parseAliasBlock()` into `spokenName = label`
+  lines. The model only fills this in when it's confident the unrecognized name
+  belongs to someone **named in the transcript**. Code maps that display `label`
+  back to a numeric id via `buildParticipantIndex` (built from the recent buffer's
+  code-side ids — ids are never sent to the model) and bumps `NAME#<spokenName> →
+id`. This is how a nickname unrelated to a person's Telegram name
+  (`Scorpion` ↔ `حسن`) gets learned, purely from conversation.
 
 ---
 

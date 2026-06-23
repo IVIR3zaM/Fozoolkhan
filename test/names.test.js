@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { extractNameCandidates } from "../src/names.js";
+import { extractNameCandidates, nameTokens } from "../src/names.js";
 import { normalizeName, currentMonth } from "../src/db.js";
 
 const BOT = "fozoolkhan_bot";
@@ -35,6 +35,31 @@ test("extractNameCandidates: deduplicates and skips one-char tokens", () => {
 test("extractNameCandidates: caps the number of lookups", () => {
   const many = Array.from({ length: 30 }, (_, i) => `نام${i}`).join(" ");
   assert.ok(extractNameCandidates(many, BOT).length <= 12);
+});
+
+test("nameTokens: splits a multi-word first_name into per-word keys", () => {
+  // The bug: a multi-word first_name was stored as one NAME# key, so a single
+  // spoken token («قلی») could never match it. Each word must be indexed.
+  assert.deepEqual(nameTokens("قلی گاوکش"), ["قلی", "گاوکش"]);
+});
+
+test("nameTokens: normalizes each word the same way the resolver looks them up", () => {
+  // Arabic yeh folds to Persian, leading @ and punctuation stripped — so the
+  // indexed key equals what extractNameCandidates produces for the same word.
+  assert.deepEqual(nameTokens("«علي» @Reza"), ["علی", "reza"]);
+});
+
+test("nameTokens: drops one-char fragments and dedupes", () => {
+  assert.deepEqual(nameTokens("رضا ب رضا"), ["رضا"]);
+});
+
+test("nameTokens: empty / falsy name yields nothing", () => {
+  assert.deepEqual(nameTokens(""), []);
+  assert.deepEqual(nameTokens(undefined), []);
+});
+
+test("nameTokens: a single-word name is unchanged", () => {
+  assert.deepEqual(nameTokens("حسام"), ["حسام"]);
 });
 
 test("normalizeName: trims, lowercases and strips a leading @", () => {

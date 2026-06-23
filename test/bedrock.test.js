@@ -6,7 +6,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { buildUserContent, parseObservationBlock } from "../src/bedrock.js";
+import {
+  buildUserContent,
+  parseObservationBlock,
+  parseAliasBlock,
+  splitControlBlocks,
+} from "../src/bedrock.js";
 
 test("buildUserContent: always ends by asking for an in-character reply", () => {
   const out = buildUserContent({});
@@ -48,6 +53,22 @@ test("buildUserContent: omits optional sections when not provided", () => {
   assert.doesNotMatch(out, /مخاطبته/);
 });
 
+test("buildUserContent: asks for coreference only when there are unresolved names", () => {
+  // No unresolved names → the ALIAS section (and its delimiter) must not appear.
+  const without = buildUserContent({
+    recentMessages: [{ name: "x", text: "y" }],
+  });
+  assert.doesNotMatch(without, /###ALIAS###/);
+
+  // With unresolved names → the section lists them and instructs the delimiter.
+  const withNames = buildUserContent({
+    recentMessages: [{ name: "Scorpion", text: "سلام" }],
+    unresolvedNames: ["حسن"],
+  });
+  assert.match(withNames, /###ALIAS###/);
+  assert.match(withNames, /حسن/);
+});
+
 test("parseObservationBlock: parses name:note pairs, trimming bullets", () => {
   const block = "- علی: اهل فوتباله\n* رضا: همیشه دیر میاد";
   assert.deepEqual(parseObservationBlock(block), [
@@ -76,4 +97,50 @@ test("parseObservationBlock: caps at four observations (token frugality)", () =>
 test("parseObservationBlock: empty / nullish input yields no observations", () => {
   assert.deepEqual(parseObservationBlock(""), []);
   assert.deepEqual(parseObservationBlock(undefined), []);
+});
+
+test("parseAliasBlock: parses spokenName=label pairs, trimming bullets", () => {
+  const block = "- حسن = Scorpion\n* سام = Sam Miga";
+  assert.deepEqual(parseAliasBlock(block), [
+    { name: "حسن", label: "Scorpion" },
+    { name: "سام", label: "Sam Miga" },
+  ]);
+});
+
+test("parseAliasBlock: skips lines without a name before the equals", () => {
+  assert.deepEqual(parseAliasBlock("= بدون اسم\nحسن = Scorpion"), [
+    { name: "حسن", label: "Scorpion" },
+  ]);
+});
+
+test("splitControlBlocks: separates reply, observations, and aliases in any order", () => {
+  const raw =
+    "سلام رفیق\n###OBS###\nحسن: اهل فوتباله\n###ALIAS###\nحسن = Scorpion";
+  const { text, obsBlock, aliasBlock } = splitControlBlocks(raw);
+  assert.equal(text, "سلام رفیق");
+  assert.deepEqual(parseObservationBlock(obsBlock), [
+    { name: "حسن", note: "اهل فوتباله" },
+  ]);
+  assert.deepEqual(parseAliasBlock(aliasBlock), [
+    { name: "حسن", label: "Scorpion" },
+  ]);
+});
+
+test("splitControlBlocks: handles the alias block appearing before observations", () => {
+  const raw = "جواب\n###ALIAS###\nحسن = Scorpion\n###OBS###\nحسن: شوخه";
+  const { text, obsBlock, aliasBlock } = splitControlBlocks(raw);
+  assert.equal(text, "جواب");
+  assert.deepEqual(parseAliasBlock(aliasBlock), [
+    { name: "حسن", label: "Scorpion" },
+  ]);
+  assert.deepEqual(parseObservationBlock(obsBlock), [
+    { name: "حسن", note: "شوخه" },
+  ]);
+});
+
+test("splitControlBlocks: a completion with no delimiters is all reply", () => {
+  const { text, obsBlock, aliasBlock } = splitControlBlocks("فقط جواب");
+  assert.equal(text, "فقط جواب");
+  assert.equal(obsBlock, "");
+  assert.equal(aliasBlock, "");
 });

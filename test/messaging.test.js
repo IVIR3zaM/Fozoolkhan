@@ -6,7 +6,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { shouldRespond, replyContextOf } from "../src/index.js";
+import {
+  shouldRespond,
+  replyContextOf,
+  subjectSnippet,
+  SUBJECT_OBS_FALLBACK,
+  buildParticipantIndex,
+} from "../src/index.js";
+import { normalizeName } from "../src/db.js";
 
 const BOT = "fozoolkhan_bot";
 
@@ -136,4 +143,84 @@ test("replyContextOf: reads a replied-to media caption", () => {
     reply_to_message: { from: { first_name: "رضا" }, caption: "عکس" },
   };
   assert.equal(replyContextOf(msg, BOT).text, "عکس");
+});
+
+// subjectSnippet — what the bot is told about the person it's asked *about*.
+// The bug this guards against: a known person with observations but no summary
+// yet (the summarizer only runs once a threshold accumulates) used to reach the
+// model as just their name, so "what do you know about Hesam?" had no context.
+
+test("subjectSnippet: prefers the compressed summary when one exists", () => {
+  const subject = {
+    names_seen: ["حسام"],
+    summary: "همیشه دیر می‌رسه و قهوه‌ایه.",
+  };
+  // Even with raw observations present, an existing summary wins.
+  assert.equal(
+    subjectSnippet(subject, ["یه نکته‌ی دیگه"]),
+    "حسام — همیشه دیر می‌رسه و قهوه‌ایه.",
+  );
+});
+
+test("subjectSnippet: falls back to raw observations when there's no summary yet", () => {
+  const subject = { names_seen: ["حسام"], summary: "" };
+  assert.equal(
+    subjectSnippet(subject, ["عاشق فوتباله", "از صبحونه متنفره"]),
+    "حسام — عاشق فوتباله؛ از صبحونه متنفره",
+  );
+});
+
+test("subjectSnippet: caps the fallback to the most recent observations", () => {
+  const subject = { names_seen: ["حسام"], summary: "" };
+  const obs = Array.from({ length: 9 }, (_, i) => `نکته${i}`);
+  const snippet = subjectSnippet(subject, obs);
+  const expectedTail = obs.slice(-SUBJECT_OBS_FALLBACK).join("؛ ");
+  assert.equal(snippet, `حسام — ${expectedTail}`);
+  // Older observations beyond the cap must not leak in.
+  assert.ok(!snippet.includes("نکته0"));
+});
+
+test("subjectSnippet: just the name when there's no summary and no observations", () => {
+  const subject = { names_seen: ["حسام"], summary: "" };
+  assert.equal(subjectSnippet(subject, []), "حسام");
+});
+
+// buildParticipantIndex — the code-owned label→id map that grounds LLM
+// coreference (Layer 2). The model returns a display label; this is what turns
+// it back into a numeric id without ever exposing ids to the model.
+
+test("buildParticipantIndex: maps a present participant's name to their id", () => {
+  const map = buildParticipantIndex([
+    { name: "Scorpion", user_id: 111, text: "سلام" },
+    { name: "رضا", user_id: 222, text: "چطوری" },
+  ]);
+  assert.equal(map.get(normalizeName("Scorpion")), 111);
+  assert.equal(map.get(normalizeName("رضا")), 222);
+});
+
+test("buildParticipantIndex: skips the bot's own lines (no id to ground)", () => {
+  const map = buildParticipantIndex([
+    { self: true, text: "قبلاً گفتم" },
+    { name: "Scorpion", user_id: 111, text: "سلام" },
+  ]);
+  assert.equal(map.size, 1);
+  assert.equal(map.get(normalizeName("Scorpion")), 111);
+});
+
+test("buildParticipantIndex: a label shared by two ids is dropped (ambiguous)", () => {
+  const map = buildParticipantIndex([
+    { name: "علی", user_id: 1, text: "a" },
+    { name: "علی", user_id: 2, text: "b" },
+  ]);
+  // Same label, two people — we must not guess which one, so it grounds to null.
+  assert.equal(map.get(normalizeName("علی")), null);
+});
+
+test("buildParticipantIndex: includes the replied-to author", () => {
+  const map = buildParticipantIndex([], {
+    first_name: "Sam",
+    last_name: "Miga",
+    id: 999,
+  });
+  assert.equal(map.get(normalizeName("Sam Miga")), 999);
 });

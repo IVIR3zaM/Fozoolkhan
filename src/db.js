@@ -206,9 +206,13 @@ export const recordMessage = async (chatId, from, text) => {
   const trimmed = (text ?? "").trim();
   if (!trimmed) return null; // media-only or empty — nothing to remember.
 
+  // `user_id` is kept code-side only (context assembly never renders it to the
+  // model — see renderLine in bedrock.js); it's what lets LLM coreference ground
+  // a spoken name back to a numeric id from people present in the conversation.
   return appendRecent(chatId, {
     name: displayNameOf(from) || "یه نفر",
     text: trimmed,
+    user_id: from?.id,
   });
 };
 

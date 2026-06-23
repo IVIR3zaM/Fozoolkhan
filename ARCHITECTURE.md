@@ -74,17 +74,24 @@ Lambda (Function URL)
    3. SPEND GUARD: read BUDGET / MONTH#<current> counter.
         - if over MONTHLY_BUDGET_EUR → reply with a pre-written Persian
           "broke until next month" line. DO NOT call Bedrock. Stop.
-   4. Resolve the relevant person(s) (name resolution, below).
+   4. Resolve the relevant person(s) (name resolution, below). A message may name
+      several people; all confidently-resolved subjects are pulled, not just the
+      first. Spoken names the NAME# index didn't recognize are kept aside for the
+      coreference step.
    5. Assemble context:
         - last CONTEXT_MESSAGE_COUNT (4–5) messages, and
-        - the relevant person's short profile snippet.
+        - a short snippet per resolved subject (the summary, or recent raw
+          observations when no summary exists yet), and
+        - when nobody resolved, up to three unrecognized names for coreference.
       Keep it tight — never send full history.
    6. Call Bedrock (max_tokens capped at MAX_RESPONSE_TOKENS).
    7. Update the monthly spend counter (estimated tokens × price, or call
       count as a proxy).
    8. Reply to Telegram.
    9. Side effects (code-owned): increment NAME/EDGE weights, append an
-      OBS# line, occasionally summarize observations into the profile.
+      OBS# line, learn any coreference aliases the model grounded to a present
+      participant (NAME# weight), occasionally summarize observations into the
+      profile.
 ```
 
 ## Cost control (two layers)
@@ -109,15 +116,39 @@ Lambda (Function URL)
 This is the canonical example of code-owned structure helping the LLM.
 
 1. The asker's `user_id` is always known — it's in the incoming Telegram update.
-2. Query `NAME#<spoken_name>` → candidate `USER#<uid>` items with `weight`s.
+2. Tokenize the message and query `NAME#<spoken_name>` **per word** → candidate
+   `USER#<uid>` items with `weight`s. Names are indexed one word at a time on the
+   write side too, so a multi-word `first_name` («قلی گاوکش») is reachable by a
+   single spoken word — the read and write sides must tokenize identically.
 3. Look up `EDGE#<asker> → USER#<uid>` for each candidate; multiply the name
    weight by the interaction count to bias toward people the asker actually
    talks with/about.
-4. Decide:
-   - **Confident** → read that person's `PROFILE` and answer.
+4. Decide, **for every name in the message** (not just the first):
+   - **Confident** → read that person's `PROFILE` and answer. Several people can
+     resolve in one message; each contributes a context line.
    - **Ambiguous** → make the ambiguity itself the joke
      ("کدوم علی؟ همونی که…؟").
+   - **Unrecognized** → kept for coreference (step 6).
 5. **Weight learning (code, not LLM):** when an `@username` appears next to a
    spoken name, or someone replies to a user and addresses them by a name,
    increment `NAME#<name> → uid`. Likewise bump `EDGE#<a> → b` when A addresses
    or replies to B. The table self-improves over time with zero LLM involvement.
+
+### Learning aliases the structure can't see
+
+A person's Telegram `first_name` is arbitrary — it may be a handle unrelated to
+what people call them (`Scorpion` who is always called `حسن`). No normalization can
+bridge that; the link lives only in the conversation. Two layers learn it, both
+keeping the structural write in **code**:
+
+- **Layer 1 — reply-vocative (pure code).** A short reply is usually addressing
+  the replied-to person by name. Each spoken-name token in it earns a _small_
+  `NAME#<token> → repliedTo.id` weight. Only the real nickname recurs across many
+  replies to the same id; random words scatter, so the weighted scoring filters
+  them out over time.
+- **Layer 2 — LLM coreference (piggybacked on the reply call).** When code
+  resolves nobody, the unrecognized names are handed to the model, which — in the
+  _same_ call — may map one to a person **named in the transcript** (`حسن =
+Scorpion`). Code maps that label back to an id via the recent buffer's code-side
+  ids (never sent to the model) and writes `NAME#حسن → id`. The model supplies
+  judgment; code still owns the write.
