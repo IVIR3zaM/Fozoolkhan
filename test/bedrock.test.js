@@ -50,7 +50,34 @@ test("buildUserContent: includes the replied-to post and the profile snippet", (
 test("buildUserContent: omits optional sections when not provided", () => {
   const out = buildUserContent({ recentMessages: [{ name: "x", text: "y" }] });
   assert.doesNotMatch(out, /ریپلای/);
-  assert.doesNotMatch(out, /مخاطبته/);
+  assert.doesNotMatch(out, /نکته‌ای درباره‌ش/); // no speaker snippet section
+  assert.doesNotMatch(out, /می‌پرسه/); // no "asking about" subjects section
+});
+
+test("buildUserContent: keeps the speaker as addressee and subjects as who they ask about", () => {
+  // The bug this guards: when Reza asks about Hesam, the model used to be told
+  // Hesam was its addressee. Now the speaker (Reza) is the addressee and Hesam is
+  // explicitly framed as someone being asked about — not replied to.
+  const out = buildUserContent({
+    profileSnippet: "رضا — رفیقِ شوخ",
+    subjectSnippets: ["حسام — طنزِ سیاسی تند"],
+  });
+  // Speaker is the one being replied to.
+  assert.match(out, /گوینده‌ی پیام که الان داری بهش جواب می‌دی همینه/);
+  assert.match(out, /رضا — رفیقِ شوخ/);
+  // Subject is framed as "asked about", and the model is told not to address them.
+  assert.match(out, /گوینده داره ازت درباره‌ی این آدم\(ها\) می‌پرسه/);
+  assert.match(out, /جوابت رو به خودِ گوینده بده، نه به این‌ها/);
+  assert.match(out, /حسام — طنزِ سیاسی تند/);
+});
+
+test("buildUserContent: lists several asked-about subjects", () => {
+  const out = buildUserContent({
+    profileSnippet: "رضا",
+    subjectSnippets: ["حسام — یک", "علی — دو"],
+  });
+  assert.match(out, /- حسام — یک/);
+  assert.match(out, /- علی — دو/);
 });
 
 test("buildUserContent: asks for coreference only when there are unresolved names", () => {

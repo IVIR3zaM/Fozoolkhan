@@ -22,12 +22,14 @@ Two kinds of call go to Bedrock. Both send a constant `system` string plus one
      own past lines carry `self: true` and render as `فضول‌خان (خودت):`.
    - `replyTo` — the message the trigger is a reply to (so the bot comments on the
      referenced post, not just on its own mention).
-   - `profileSnippet` — context for whoever the bot is addressing. By default the
-     speaker; when the message names people, the **confidently-resolved subjects**
-     (one line each — a message can ask about several people at once). Each line is
-     `names_seen[0] — summary`, or, when the summarizer hasn't run yet,
-     `names_seen[0] — <recent raw observations>` so a known-but-unsummarized person
-     still reaches the model with real context (`subjectSnippet`).
+   - `profileSnippet` — context about the **speaker** (the person the bot is
+     replying to), always present so the bot knows who it's addressing. Line shape
+     is `names_seen[0] — summary`, or `names_seen[0] — <recent raw observations>`
+     when the summarizer hasn't run yet (`subjectSnippet`).
+   - `subjectSnippets` — context about the people the speaker is asking _about_
+     (one line each — a message can ask about several at once), framed distinctly
+     so the model answers the **speaker** about them rather than mistaking a
+     subject for its addressee. Same per-person line shape as `profileSnippet`.
    - `nameNote` — a code-written hint, e.g. an ambiguity note ("which Ali?").
    - `unresolvedNames` — only when code resolved **nobody**: up to three spoken
      names the `NAME#` index didn't recognize, handed to the model for coreference

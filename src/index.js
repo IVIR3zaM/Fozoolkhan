@@ -675,7 +675,8 @@ export const debugLine = (m) =>
  * @param {object|null} args.resolution  Name-resolution outcome for the message.
  * @param {Array|null} args.recentMessages  The rolling context buffer.
  * @param {object} [args.replyTo]  The replied-to message context, if any.
- * @param {string} args.profileSnippet  The snippet that would be sent to the model.
+ * @param {string} args.profileSnippet  The speaker snippet sent to the model.
+ * @param {string[]} [args.subjectSnippets]  Snippets for the people asked about.
  * @param {string} args.nameNote  The ambiguity note, if any.
  * @param {string[]} [args.unresolvedNames]  Names handed to the model for coreference.
  */
@@ -686,6 +687,7 @@ const runDebug = async ({
   recentMessages,
   replyTo,
   profileSnippet,
+  subjectSnippets,
   nameNote,
   unresolvedNames,
 }) => {
@@ -706,7 +708,10 @@ const runDebug = async ({
       `unresolvedNames (به مدل برای coreference): ${
         unresolvedNames?.length ? unresolvedNames.join(", ") : "—"
       }`,
-      `profileSnippet (که به مدل می‌ره): ${profileSnippet || "—"}`,
+      `profileSnippet گوینده (مخاطب): ${profileSnippet || "—"}`,
+      `subjectSnippets (کسایی که ازشون پرسیده): ${
+        subjectSnippets?.length ? subjectSnippets.join(" || ") : "—"
+      }`,
       `خرج این ماه: ${spent.toFixed(4)} از ${Number(
         process.env.MONTHLY_BUDGET_EUR ?? 5,
       ).toFixed(2)} یورو`,
@@ -726,6 +731,7 @@ const runDebug = async ({
     recentMessages,
     replyTo,
     profileSnippet,
+    subjectSnippets,
     nameNote,
     unresolvedNames,
   });
@@ -936,12 +942,13 @@ export const handler = async (event) => {
   }
 
   // Record the sender into their PROFILE item (code-owned, keyed by numeric
-  // user_id). By default the snippet describes the speaker so the bot knows who
-  // it's replying to. Then run name resolution: if the speaker is asking about
-  // one or more people by name, swap in those people's profiles when we're
-  // confident, or hand the LLM an ambiguity note so the "which one?" becomes the
-  // joke.
+  // user_id). `profileSnippet` always describes the *speaker* — the bot is
+  // replying to them, so it must know who's talking. Then run name resolution: if
+  // the speaker is asking about other people, their context goes in a *separate*
+  // `subjectSnippets` field, so the bot answers the speaker *about* those people
+  // rather than mistaking a subject for the person it's addressing.
   let profileSnippet = "";
+  let subjectSnippets = []; // context about the people the speaker asked about.
   let nameNote = "";
   let unresolvedNames = []; // spoken names to hand the model for coreference.
   let speaker = null; // kept for the debug dump (the speaker's full profile).
@@ -963,13 +970,10 @@ export const handler = async (event) => {
       unresolvedNames = resolution.unresolved.slice(0, MAX_UNRESOLVED_NAMES);
     }
     if (resolution.confident.length) {
-      const snippets = [];
       for (const { userId } of resolution.confident) {
         const snippet = await loadSubjectSnippet(userId);
-        if (snippet) snippets.push(snippet);
+        if (snippet) subjectSnippets.push(snippet);
       }
-      // Replace the speaker-only default with the people actually asked about.
-      if (snippets.length) profileSnippet = snippets.join("\n");
     } else if (resolution.ambiguous.length) {
       // No confident subject, but a name matched several people — make the
       // "which one?" the joke for the first such name.
@@ -998,6 +1002,7 @@ export const handler = async (event) => {
         recentMessages,
         replyTo,
         profileSnippet,
+        subjectSnippets,
         nameNote,
         unresolvedNames,
       });
@@ -1022,6 +1027,7 @@ export const handler = async (event) => {
       recentMessages,
       replyTo,
       profileSnippet,
+      subjectSnippets,
       nameNote,
       unresolvedNames,
     });

@@ -80,8 +80,10 @@ Lambda (Function URL)
       coreference step.
    5. Assemble context:
         - last CONTEXT_MESSAGE_COUNT (4–5) messages, and
-        - a short snippet per resolved subject (the summary, or recent raw
-          observations when no summary exists yet), and
+        - a snippet about the speaker (the bot is replying to them), and
+        - a separate snippet per resolved subject the speaker asked *about* (the
+          summary, or recent raw observations when no summary exists yet) — framed
+          so the bot answers the speaker about them, not as if addressing them, and
         - when nobody resolved, up to three unrecognized names for coreference.
       Keep it tight — never send full history.
    6. Call Bedrock (max_tokens capped at MAX_RESPONSE_TOKENS).

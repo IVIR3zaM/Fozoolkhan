@@ -185,7 +185,10 @@ const renderLine = (m) =>
  * @param {{name: string, text: string, self?: boolean}} [ctx.replyTo]  The
  *   message the triggering message is a reply to, so the bot comments on the
  *   actual referenced post — not just on its own mention.
- * @param {string} [ctx.profileSnippet]
+ * @param {string} [ctx.profileSnippet]  Context about the *speaker* — the person
+ *   the bot is replying to.
+ * @param {string[]} [ctx.subjectSnippets]  Context about the people the speaker is
+ *   asking *about* (distinct from the speaker, so the bot doesn't address them).
  * @param {string} [ctx.nameNote]  Optional code-owned note (e.g. an ambiguity hint).
  * @param {string[]} [ctx.unresolvedNames]  Spoken names the code couldn't resolve;
  *   the model is asked to map them to a person in the transcript (Layer 2).
@@ -195,6 +198,7 @@ export const buildUserContent = ({
   recentMessages,
   replyTo,
   profileSnippet,
+  subjectSnippets,
   nameNote,
   unresolvedNames,
 } = {}) => {
@@ -217,7 +221,17 @@ export const buildUserContent = ({
 
   if (profileSnippet) {
     lines.push("");
-    lines.push(`نکته‌ای درباره‌ی کسی که الان مخاطبته: ${profileSnippet}`);
+    lines.push(
+      `گوینده‌ی پیام که الان داری بهش جواب می‌دی همینه؛ نکته‌ای درباره‌ش: ${profileSnippet}`,
+    );
+  }
+
+  if (subjectSnippets?.length) {
+    lines.push("");
+    lines.push(
+      "گوینده داره ازت درباره‌ی این آدم(ها) می‌پرسه. حواست باشه: جوابت رو به خودِ گوینده بده، نه به این‌ها؛ فقط درباره‌شون حرف بزن:",
+    );
+    for (const s of subjectSnippets) lines.push(`- ${s}`);
   }
 
   if (nameNote) {
