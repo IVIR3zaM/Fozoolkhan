@@ -9,5 +9,6 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: stable
+      - run: npm install
       - run: go install github.com/IVIR3zaM/Cairn/cmd/cairn@latest
       - run: cairn verify
