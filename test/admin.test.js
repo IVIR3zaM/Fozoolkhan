@@ -12,6 +12,9 @@ import {
   renderGroups,
   renderUsage,
   renderModelComparison,
+  renderUserList,
+  renderUserContext,
+  USERS_EMPTY,
   statusLabel,
   approvalKeyboard,
   groupsKeyboard,
@@ -177,6 +180,55 @@ test("renderModelComparison: no current mark when the model is unknown", () => {
   const text = renderModelComparison(1, 1000, 1000, "some-other-model");
   assert.doesNotMatch(text, /الان ✅/);
   assert.doesNotMatch(text, /نسبت به الان/); // no deltas without a current baseline
+});
+
+test("renderUserList: one line per user with id, name, handle, summary", () => {
+  const text = renderUserList([
+    {
+      PK: "USER#87851501",
+      names_seen: ["حسام"],
+      usernames_seen: ["hesam"],
+      summary: "اهل طنزِ سیاسی",
+    },
+    { PK: "USER#42", names_seen: ["رضا"] },
+  ]);
+  assert.match(text, /2 نفر/);
+  assert.match(text, /87851501 — حسام \(@hesam\) — اهل طنزِ سیاسی/);
+  assert.match(text, /42 — رضا/);
+  assert.match(text, /\/user </); // points the admin at the detail command
+});
+
+test("renderUserList: empty state when nobody is stored", () => {
+  assert.equal(renderUserList([]), USERS_EMPTY);
+});
+
+test("renderUserContext: dumps profile, observations, aliases and edges", () => {
+  const text = renderUserContext({
+    uid: "87851501",
+    profile: {
+      names_seen: ["حسام", "Hesam"],
+      usernames_seen: ["hesam"],
+      summary: "اهل طنزِ سیاسی",
+      last_updated: "2026-06-23T10:00:00.000Z",
+    },
+    observations: ["همیشه دیر میاد", "عاشق فوتباله"],
+    aliases: [{ name: "سام", weight: 3 }],
+    edges: [{ label: "رضا", count: 5 }],
+  });
+  assert.match(text, /کاربر 87851501/);
+  assert.match(text, /نام‌ها: حسام، Hesam/);
+  assert.match(text, /یوزرنیم‌ها: @hesam/);
+  assert.match(text, /خلاصه: اهل طنزِ سیاسی/);
+  assert.match(text, /یادداشت‌ها \(2\)/);
+  assert.match(text, /• همیشه دیر میاد/);
+  assert.match(text, /• سام \(وزن 3\)/);
+  assert.match(text, /• رضا \(×5\)/);
+});
+
+test("renderUserContext: graceful when nothing is stored for the user", () => {
+  const text = renderUserContext({ uid: "999", profile: null });
+  assert.match(text, /پروفایلی براش ذخیره نشده/);
+  assert.match(text, /یادداشت‌ها \(0\)/);
 });
 
 test("approvalKeyboard: encodes the target chat id in callback_data", () => {

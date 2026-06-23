@@ -61,6 +61,28 @@ everything stays cheap and inside AWS.
 7. Copy `config.example.js` → `config.js`, fill in constants; put secrets in
    environment variables (never commit them).
 
+## Inspecting stored data (admin commands)
+
+Everything the bot knows about a person is keyed by their numeric Telegram user
+id. The admin can inspect it right inside Telegram (DM the bot) — two read-only
+commands, registered in the «/» menu:
+
+- **`/users`** — lists every person the bot has seen, with their numeric id,
+  name, handle, and a short summary.
+- **`/user <id>`** — dumps everything stored about that user:
+  - **Profile** — names and usernames seen, the free-text summary, last update.
+  - **Observations** — the append-only one-line notes (TTL-expiring). The
+    summary plus these are what actually feed the model as the person's context.
+  - **Aliases** — spoken names that resolve to this user, with their weights.
+  - **Talks-to** — who they address/reply to, with interaction counts.
+
+Take an id from `/users` and pass it to `/user`, e.g. `/user 87851501`.
+
+Note: the model never receives this whole dump — only a tight snippet (primary
+name + summary, or the last few observations when there's no summary yet). These
+commands show the full stored state behind that snippet. See
+[ARCHITECTURE.md](ARCHITECTURE.md) for the key layout.
+
 ## Project docs
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — data model, request lifecycle, cost control.

@@ -30,6 +30,9 @@ import {
   getChatAccess,
   setChatAccess,
   listChatAccess,
+  listProfiles,
+  getUserAliases,
+  getOutgoingEdges,
   bumpNameWeight,
   normalizeName,
   currentMonth,
@@ -341,6 +344,11 @@ const handleCallbackQuery = async (callbackQuery) => {
   }
 };
 
+// Prompt shown when /user is run without a numeric id, and the cap on how many
+// "talks-to" edges the detail view resolves+lists (frugal: each needs a read).
+const USER_NEED_ID = "آیدی عددیِ کاربر رو بده: /user <id> (از /users بگیرش)";
+const USER_EDGE_LIMIT = 20;
+
 // Pre-written Persian lines for the admin slash-command fallback.
 const CMD_APPROVED = "فعال شد ✅ از این به بعد اینجا هستم.";
 const CMD_DENIED = "باشه، اینجا ساکت می‌مونم.";
@@ -364,6 +372,8 @@ export const statusLabel = (status) =>
 export const ADMIN_COMMANDS = [
   { command: "groups", description: "گروه‌ها و وضعیت تأییدشون" },
   { command: "usage", description: "وضعیت اعتبار و خرجِ این ماه" },
+  { command: "users", description: "لیستِ کاربرها و چیزی که ازشون می‌دونم" },
+  { command: "user", description: "هرچی از یه کاربر ذخیره کردم: /user <آیدی>" },
   {
     command: "approve",
     description: "فعال‌کردن گروه (داخل گروه، یا با chat_id)",
@@ -378,6 +388,8 @@ export const ADMIN_HELP = [
   "دستورهای مدیریتی فضول‌خان:",
   "/groups — لیست گروه‌ها و وضعیتشون، با دکمه‌ی تغییر",
   "/usage — خرج این ماه، باقی‌مونده و تاریخ ریست",
+  "/users — لیستِ همه‌ی کاربرها (با آیدی عددیشون)",
+  "/user <آیدی> — هرچی از اون کاربر ذخیره کردم: نام‌ها، خلاصه، یادداشت‌ها، اسم‌ها و اینکه با کیا حرف می‌زنه",
   "/approve — فعال‌کردن گروه (داخل گروه بزن، یا تو دایرکت: /approve <chat_id>)",
   "/deny — ساکت‌کردن گروه (مثل بالا)",
   "",
@@ -570,6 +582,107 @@ export const renderUsage = (
     .join("\n");
 };
 
+// Shorten a string for the one-line-per-user list so a long summary doesn't blow
+// the row out.
+const truncate = (s, n = 60) => {
+  const t = String(s ?? "");
+  return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+};
+
+export const USERS_EMPTY = "هنوز از هیچ‌کس چیزی ذخیره نکردم 🤷";
+
+/**
+ * Render the admin `/users` overview: one line per person the bot has seen, with
+ * their numeric id (to pass to `/user`), display name, handle, and a truncated
+ * summary. Pure formatting over the PROFILE items — no Bedrock.
+ *
+ * @param {object[]} profiles  Raw PROFILE items (newest first).
+ * @returns {string}
+ */
+export const renderUserList = (profiles) => {
+  if (!profiles?.length) return USERS_EMPTY;
+  const lines = profiles.map((p) => {
+    const uid = String(p.PK ?? "").replace(/^USER#/, "");
+    const name = p.names_seen?.[0] ?? "—";
+    const handle = p.usernames_seen?.[0] ? ` (@${p.usernames_seen[0]})` : "";
+    const summary = p.summary ? ` — ${truncate(p.summary)}` : "";
+    return `• ${uid} — ${name}${handle}${summary}`;
+  });
+  return [
+    `کاربرهای ذخیره‌شده (${profiles.length} نفر، تازه‌ترین اول):`,
+    ...lines,
+    "",
+    "برای جزئیاتِ هرکی: /user <آیدی عددی>",
+  ].join("\n");
+};
+
+/**
+ * Render the admin `/user <id>` detail view: everything stored about one person —
+ * the raw material their context snippet is built from. Pure formatting over the
+ * code-owned per-user state (profile, observations, name aliases, edges); the
+ * caller does the reads and resolves the edge labels.
+ *
+ * @param {object} args
+ * @param {number|string} args.uid  The numeric user id.
+ * @param {object|null} args.profile  Their PROFILE item, or null.
+ * @param {string[]} [args.observations]  Their OBS# lines (oldest first).
+ * @param {Array<{name: string, weight: number}>} [args.aliases]  Names → this user.
+ * @param {Array<{label: string, count: number}>} [args.edges]  Who they talk to.
+ * @returns {string}
+ */
+export const renderUserContext = ({
+  uid,
+  profile,
+  observations = [],
+  aliases = [],
+  edges = [],
+}) => {
+  const lines = [`👤 کاربر ${uid}`];
+
+  if (!profile) {
+    lines.push("پروفایلی براش ذخیره نشده.");
+  } else {
+    lines.push(`نام‌ها: ${(profile.names_seen ?? []).join("، ") || "—"}`);
+    lines.push(
+      `یوزرنیم‌ها: ${(profile.usernames_seen ?? []).map((u) => `@${u}`).join("، ") || "—"}`,
+    );
+    lines.push(`خلاصه: ${profile.summary || "—"}`);
+    lines.push(`آخرین به‌روزرسانی: ${profile.last_updated || "—"}`);
+  }
+
+  lines.push("");
+  lines.push(
+    `یادداشت‌ها (${observations.length})${observations.length ? " — قدیمی‌ترین اول:" : ":"}`,
+  );
+  if (observations.length) {
+    for (const o of observations) lines.push(`• ${o}`);
+  } else {
+    lines.push("—");
+  }
+
+  lines.push("");
+  lines.push(`اسم‌هایی که به این شخص می‌رسن (${aliases.length}):`);
+  if (aliases.length) {
+    for (const a of aliases) lines.push(`• ${a.name} (وزن ${a.weight})`);
+  } else {
+    lines.push("—");
+  }
+
+  lines.push("");
+  lines.push(`با کیا حرف می‌زنه (${edges.length}):`);
+  if (edges.length) {
+    for (const e of edges) lines.push(`• ${e.label} (×${e.count})`);
+  } else {
+    lines.push("—");
+  }
+
+  lines.push("");
+  lines.push(
+    "یادآوری: مدل فقط یه تیکه‌ی کوتاه (اسم + خلاصه، یا چندتا یادداشتِ آخر) رو می‌بینه، نه همه‌ی این‌ها.",
+  );
+  return lines.join("\n");
+};
+
 /**
  * Parse a slash-command, tolerating Telegram's `/cmd@botname` form and an
  * optional argument. Returns null if the text isn't a command.
@@ -624,6 +737,43 @@ const handleAdminCommand = async (message) => {
     await sendMessage(
       message.chat.id,
       renderUsage(usage.spendEur, budget, usage, process.env.BEDROCK_MODEL_ID),
+      message.message_id,
+    );
+    return true;
+  }
+
+  // The per-user data the bot has stored — the raw material behind each person's
+  // context. `/users` lists everyone (with ids); `/user <id>` dumps one person.
+  // Chunked because a person with many observations can exceed Telegram's limit.
+  if (parsed.cmd === "users") {
+    const text = renderUserList(await listProfiles());
+    await sendChunked(message.chat.id, text, message.message_id);
+    return true;
+  }
+  if (parsed.cmd === "user" || parsed.cmd === "whois") {
+    const uid = parsed.arg;
+    if (!uid) {
+      await sendMessage(message.chat.id, USER_NEED_ID, message.message_id);
+      return true;
+    }
+    const [profile, observations, aliases, edgesRaw] = await Promise.all([
+      getProfile(uid),
+      getObservations(uid),
+      getUserAliases(uid),
+      getOutgoingEdges(uid),
+    ]);
+    // Resolve a display label for each edge target (capped for frugality).
+    const edges = [];
+    for (const e of edgesRaw.slice(0, USER_EDGE_LIMIT)) {
+      const p = await getProfile(e.userId);
+      const label =
+        p?.names_seen?.[0] ||
+        (p?.usernames_seen?.[0] ? `@${p.usernames_seen[0]}` : `id=${e.userId}`);
+      edges.push({ label, count: e.count });
+    }
+    await sendChunked(
+      message.chat.id,
+      renderUserContext({ uid, profile, observations, aliases, edges }),
       message.message_id,
     );
     return true;

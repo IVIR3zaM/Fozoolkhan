@@ -530,6 +530,91 @@ export const getNameCandidates = async (name) => {
 };
 
 /**
+ * List every PROFILE item (one per user the bot has ever seen), most recently
+ * updated first. Code-owned admin read: the table is small and reconstructable,
+ * so a filtered Scan is fine. Powers the admin `/users` overview.
+ *
+ * @returns {Promise<object[]>} The raw PROFILE items.
+ */
+export const listProfiles = async () => {
+  const items = [];
+  let startKey;
+  do {
+    const { Items, LastEvaluatedKey } = await docClient.send(
+      new ScanCommand({
+        TableName: tableName(),
+        FilterExpression: "SK = :p",
+        ExpressionAttributeValues: { ":p": "PROFILE" },
+        ExclusiveStartKey: startKey,
+      }),
+    );
+    items.push(...(Items ?? []));
+    startKey = LastEvaluatedKey;
+  } while (startKey);
+  items.sort((a, b) =>
+    String(b.last_updated ?? "").localeCompare(a.last_updated ?? ""),
+  );
+  return items;
+};
+
+/**
+ * The spoken names that resolve to a given user id, with their weights, strongest
+ * first. The reverse of getNameCandidates (name → people): this is people → names,
+ * so it needs a filtered Scan of the NAME# partitions on the user's SK. Powers the
+ * admin `/user` detail view.
+ *
+ * @param {number|string} userId  Numeric user id.
+ * @returns {Promise<Array<{name: string, weight: number}>>}
+ */
+export const getUserAliases = async (userId) => {
+  if (!userId) return [];
+  const items = [];
+  let startKey;
+  do {
+    const { Items, LastEvaluatedKey } = await docClient.send(
+      new ScanCommand({
+        TableName: tableName(),
+        FilterExpression: "begins_with(PK, :n) AND SK = :sk",
+        ExpressionAttributeValues: { ":n": "NAME#", ":sk": `USER#${userId}` },
+        ExclusiveStartKey: startKey,
+      }),
+    );
+    items.push(...(Items ?? []));
+    startKey = LastEvaluatedKey;
+  } while (startKey);
+  return items
+    .map((i) => ({
+      name: String(i.PK ?? "").replace(/^NAME#/, ""),
+      weight: Number(i.weight ?? 0),
+    }))
+    .sort((a, b) => b.weight - a.weight);
+};
+
+/**
+ * The people a user addresses/replies to, with interaction counts, busiest first
+ * (the `EDGE#<uid>` rows). Powers the admin `/user` detail view.
+ *
+ * @param {number|string} userId  Numeric user id.
+ * @returns {Promise<Array<{userId: string, count: number}>>}
+ */
+export const getOutgoingEdges = async (userId) => {
+  if (!userId) return [];
+  const { Items } = await docClient.send(
+    new QueryCommand({
+      TableName: tableName(),
+      KeyConditionExpression: "PK = :pk",
+      ExpressionAttributeValues: { ":pk": `EDGE#${userId}` },
+    }),
+  );
+  return (Items ?? [])
+    .map((i) => ({
+      userId: String(i.SK ?? "").replace(/^USER#/, ""),
+      count: Number(i.count ?? 0),
+    }))
+    .sort((a, b) => b.count - a.count);
+};
+
+/**
  * Record that an @username currently belongs to a numeric user id. Code-owned,
  * structure only: latest write wins, so if a username changes hands the index
  * follows. No-op for blank usernames. This is what lets a later `@username`
