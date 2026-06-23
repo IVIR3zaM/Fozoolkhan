@@ -140,17 +140,22 @@ This is the canonical example of code-owned structure helping the LLM.
 
 A person's Telegram `first_name` is arbitrary — it may be a handle unrelated to
 what people call them (`Scorpion` who is always called `حسن`). No normalization can
-bridge that; the link lives only in the conversation. Two layers learn it, both
-keeping the structural write in **code**:
+bridge that; the link lives only in the conversation.
 
-- **Layer 1 — reply-vocative (pure code).** A short reply is usually addressing
-  the replied-to person by name. Each spoken-name token in it earns a _small_
-  `NAME#<token> → repliedTo.id` weight. Only the real nickname recurs across many
-  replies to the same id; random words scatter, so the weighted scoring filters
-  them out over time.
-- **Layer 2 — LLM coreference (piggybacked on the reply call).** When code
-  resolves nobody, the unrecognized names are handed to the model, which — in the
-  _same_ call — may map one to a person **named in the transcript** (`حسن =
+Telling a name apart from an ordinary word («حسن» vs «آره») is a judgement code
+can't make — any code heuristic that mines reply text for "names" ends up indexing
+junk (an earlier reply-vocative heuristic did exactly this, turning «آره»/«استرسش»
+into aliases for whoever was replied to). So **the LLM is the only thing that
+proposes an alias; code still owns the write**:
+
+- **LLM coreference (piggybacked on the reply call).** When code resolves nobody,
+  the unrecognized names are handed to the model, which — in the _same_ call (no
+  extra cost) — may map one to a person **named in the transcript** (`حسن =
 Scorpion`). Code maps that label back to an id via the recent buffer's code-side
-  ids (never sent to the model) and writes `NAME#حسن → id`. The model supplies
-  judgment; code still owns the write.
+  ids (never sent to the model) and writes `NAME#حسن → id`. The model supplies the
+  judgement that a token is a name; code still owns the structural write.
+
+Code-side learning is therefore limited to names Telegram itself vouches for — a
+`first_name` sighting and explicit `text_mention`s (which carry a real user id) —
+never words guessed out of free text. Anything the LLM never grounds and code never
+sees a hard signal for can still be curated by hand with `scripts/names-admin.js`.

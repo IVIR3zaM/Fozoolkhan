@@ -207,16 +207,6 @@ export const resolveSubjects = async (askerId, text, botUsername) => {
   return { confident, ambiguous, unresolved };
 };
 
-// Reply-vocative alias learning (Layer 1). A short reply is usually addressing
-// the replied-to person — often by a nickname that has nothing to do with their
-// Telegram first_name («Scorpion» whom everyone calls «حسن»). So each spoken-name
-// token in a short reply is a *weak* alias signal for that person's id. The small
-// weight, plus the fact that only the real nickname recurs across many replies to
-// the *same* id (random words scatter across different ids), is what keeps the
-// NAME# index from filling up with noise.
-const REPLY_ALIAS_MAX_TOKENS = 4;
-const REPLY_ALIAS_WEIGHT = 0.34;
-
 // Tokens the model uses to mean "this note is about the person who just spoke",
 // folded to the speaker's own id rather than looked up as a third party.
 const SELF_REFERENCES = new Set(["خودش", "خودت", "گوینده", "من", "طرف"]);
@@ -323,16 +313,6 @@ export const learnFromMessage = async (message) => {
     }
     if (repliedTo.username) {
       tasks.push(recordUsername(repliedTo.username, repliedTo.id));
-    }
-
-    // Layer 1: a short reply is likely addressing the replied-to person by name.
-    // Learn each spoken-name token as a weak alias for their id.
-    const replyText = message.text ?? message.caption ?? "";
-    const tokens = extractNameCandidates(replyText, process.env.BOT_USERNAME);
-    if (tokens.length && tokens.length <= REPLY_ALIAS_MAX_TOKENS) {
-      for (const token of tokens) {
-        tasks.push(bumpNameWeight(token, repliedTo.id, REPLY_ALIAS_WEIGHT));
-      }
     }
   }
 
