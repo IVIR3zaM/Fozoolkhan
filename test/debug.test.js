@@ -66,7 +66,12 @@ beforeEach(() => {
   originalFetch = global.fetch;
   global.fetch = async (url, opts) => {
     calls.push(JSON.parse(opts.body));
-    return { ok: true, status: 200, text: async () => "" };
+    return {
+      ok: true,
+      status: 200,
+      text: async () => "",
+      json: async () => ({ ok: true, result: { message_id: 1 } }),
+    };
   };
 });
 

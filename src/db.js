@@ -96,6 +96,20 @@ const usernameKey = (username) => ({
 // timestamp under that person's partition.
 const obsKey = (userId, ts) => ({ PK: `USER#${userId}`, SK: `OBS#${ts}` });
 
+// Primary key for one stored message, keyed by its Telegram message id under the
+// chat partition. Telegram's webhook only ever carries the *immediate* replied-to
+// message (it never nests), so to walk a reply thread back toward its first post
+// we keep each message here with a pointer to its own reply parent.
+const threadKey = (chatId, messageId) => ({
+  PK: `CHAT#${chatId}`,
+  SK: `MSG#${messageId}`,
+});
+
+// How many days a stored thread message lives before DynamoDB TTL auto-expires
+// it. Threads are only referenced while a conversation is live, so this is short
+// — old posts that no one is replying to anymore just fall away.
+const threadTtlDays = () => Number(process.env.THREAD_TTL_DAYS ?? 7);
+
 // How many days an observation lives before DynamoDB TTL auto-expires it, so the
 // log (and the summarization input it feeds) stays small. Token frugality.
 const obsTtlDays = () => Number(process.env.OBS_TTL_DAYS ?? 30);
@@ -230,6 +244,69 @@ export const recordBotMessage = async (chatId, text) => {
   const trimmed = (text ?? "").trim();
   if (!trimmed) return;
   await appendRecent(chatId, { name: "فضول‌خان", text: trimmed, self: true });
+};
+
+/**
+ * Store one message under its Telegram message id, with a pointer to the message
+ * it is itself a reply to (if any). This is what lets a later reply be walked
+ * back up the thread one hop at a time (the webhook only ever hands us the
+ * immediate parent). Each item TTL-expires so the store stays bounded. Code-owned
+ * structure; no LLM input. No-op for blank text or a missing id.
+ *
+ * @param {number|string} chatId  Telegram chat id.
+ * @param {number|string} messageId  This message's Telegram message id.
+ * @param {object} entry
+ * @param {string} entry.name  Display label of the author (or the bot).
+ * @param {string} entry.text  The message text (or caption).
+ * @param {boolean} [entry.self]  True for the bot's own messages.
+ * @param {number|string} [entry.replyToId]  Id of the message this replies to.
+ */
+export const recordThreadMessage = async (
+  chatId,
+  messageId,
+  { name, text, self = false, replyToId } = {},
+) => {
+  if (!chatId || !messageId) return;
+  const trimmed = (text ?? "").trim();
+  if (!trimmed) return;
+
+  const ttl = Math.floor(Date.now() / 1000) + threadTtlDays() * 86400;
+  const item = {
+    ...threadKey(chatId, messageId),
+    name: name || "یه نفر",
+    text: trimmed,
+    ttl,
+  };
+  if (self) item.self = true;
+  if (replyToId) item.reply_to_id = replyToId;
+
+  await docClient.send(new PutCommand({ TableName: tableName(), Item: item }));
+};
+
+/**
+ * Read one stored message by its id, or null if we never stored it (or it has
+ * TTL-expired). The `replyToId` it returns is what drives the next hop up the
+ * thread when reconstructing a reply chain.
+ *
+ * @param {number|string} chatId  Telegram chat id.
+ * @param {number|string} messageId  The message id to read.
+ * @returns {Promise<{name: string, text: string, self: boolean, replyToId: number|string|null}|null>}
+ */
+export const getThreadMessage = async (chatId, messageId) => {
+  if (!chatId || !messageId) return null;
+  const { Item } = await docClient.send(
+    new GetCommand({
+      TableName: tableName(),
+      Key: threadKey(chatId, messageId),
+    }),
+  );
+  if (!Item) return null;
+  return {
+    name: Item.name,
+    text: Item.text,
+    self: Boolean(Item.self),
+    replyToId: Item.reply_to_id ?? null,
+  };
 };
 
 /**

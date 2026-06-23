@@ -39,12 +39,31 @@ test("buildUserContent: marks the bot's own past lines with (خودت)", () => {
 
 test("buildUserContent: includes the replied-to post and the profile snippet", () => {
   const out = buildUserContent({
-    replyTo: { name: "علی", text: "حرف قبلی" },
+    replyChain: [{ name: "علی", text: "حرف قبلی" }],
     profileSnippet: "علی — اهل شوخی",
   });
   assert.match(out, /ریپلای/);
   assert.match(out, /علی: حرف قبلی/);
   assert.match(out, /علی — اهل شوخی/);
+});
+
+test("buildUserContent: renders a multi-message reply chain oldest-first", () => {
+  const out = buildUserContent({
+    replyChain: [
+      { name: "علی", text: "ریشه" },
+      { self: true, text: "جوابِ بات" },
+      { name: "رضا", text: "آخرین حرف" },
+    ],
+  });
+  // Framed as a thread, not a single reply.
+  assert.match(out, /رشته‌ی گفتگو/);
+  // Oldest-first ordering is preserved, and the bot's own line is marked.
+  assert.ok(
+    out.indexOf("علی: ریشه") < out.indexOf("فضول‌خان (خودت): جوابِ بات"),
+  );
+  assert.ok(
+    out.indexOf("فضول‌خان (خودت): جوابِ بات") < out.indexOf("رضا: آخرین حرف"),
+  );
 });
 
 test("buildUserContent: omits optional sections when not provided", () => {

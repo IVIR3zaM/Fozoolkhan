@@ -25,6 +25,15 @@ export const config = {
   // How many recent messages to include as context (never full history).
   CONTEXT_MESSAGE_COUNT: 5,
 
+  // Reply-thread context. When someone replies to one of the bot's messages, the
+  // thread is walked back toward its first post and fed as context. The walk
+  // stops as soon as adding the next ancestor would push past REPLY_CHAIN_MAX_CHARS
+  // (so a long thread never balloons the prompt — token frugality). THREAD_TTL_DAYS
+  // is how long each stored message lives before DynamoDB TTL expires it (enable
+  // TTL on the `ttl` attribute).
+  REPLY_CHAIN_MAX_CHARS: 1200,
+  THREAD_TTL_DAYS: 7,
+
   // Append-only observation log. OBS_TTL_DAYS is how long each one-line
   // observation lives before DynamoDB TTL auto-expires it (enable TTL on the
   // `ttl` attribute). OBS_SUMMARY_THRESHOLD is how many observations accumulate

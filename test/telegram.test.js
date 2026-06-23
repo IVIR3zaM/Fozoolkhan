@@ -18,7 +18,12 @@ let originalFetch;
 beforeEach(() => {
   process.env.TELEGRAM_BOT_TOKEN = "test-token";
   calls = [];
-  nextResponse = { ok: true, status: 200, text: async () => "" };
+  nextResponse = {
+    ok: true,
+    status: 200,
+    text: async () => "",
+    json: async () => ({ ok: true, result: { message_id: 1 } }),
+  };
   originalFetch = global.fetch;
   global.fetch = async (url, opts) => {
     calls.push({ url, body: JSON.parse(opts.body) });

@@ -18,6 +18,8 @@ import {
   recordSighting,
   recordMessage,
   recordBotMessage,
+  recordThreadMessage,
+  getThreadMessage,
   getMonthlySpend,
   addMonthlySpend,
   getProfile,
@@ -624,6 +626,69 @@ export const replyContextOf = (message, botUsername) => {
   return { name, text, self };
 };
 
+// Char budget for a reconstructed reply thread. Walking back toward the thread's
+// first post stops as soon as adding the next ancestor would push the running
+// total past this — so a long thread never balloons the prompt (token frugality
+// is a hard rule — see AGENTS.md). The directly-replied-to message is always
+// included, even if it alone exceeds the budget.
+const replyChainMaxChars = () =>
+  Number(process.env.REPLY_CHAIN_MAX_CHARS ?? 1200);
+
+/**
+ * Reconstruct the reply thread the trigger is part of, walking from the message
+ * being replied to back toward the thread's first post. Telegram's webhook only
+ * carries the *immediate* replied-to message (it never nests), so the directly-
+ * replied-to message comes from the webhook (replyContextOf) and everything above
+ * it is read one hop at a time from the per-message store (getThreadMessage). The
+ * walk stops at the root, at a missing/expired ancestor, or — the point of this —
+ * as soon as adding the next ancestor would exceed the char budget. A cycle guard
+ * protects against a message that (somehow) points back into its own thread.
+ *
+ * @param {object} message  Telegram `message` object.
+ * @param {string} botUsername  The bot's @username (without @).
+ * @param {Function} [getThread]  Reader for a stored message (injected for tests).
+ * @param {number} [maxChars]  Char budget for the whole chain.
+ * @returns {Promise<Array<{name: string, text: string, self: boolean}>>}
+ *   The chain oldest-first (root-ward ancestors first, the directly-replied-to
+ *   message last), or [] when the trigger isn't a reply / the parent has no text.
+ */
+export const loadReplyChain = async (
+  message,
+  botUsername,
+  getThread = getThreadMessage,
+  maxChars = replyChainMaxChars(),
+) => {
+  const immediate = replyContextOf(message, botUsername);
+  if (!immediate) return [];
+
+  // Newest-first while walking; reversed to oldest-first before returning.
+  const chain = [immediate];
+  let budget = maxChars - immediate.text.length;
+
+  const chatId = message.chat?.id;
+  // The immediate parent's own parent id lives only in our store (the webhook
+  // doesn't nest), so seed the walk from the parent's stored record.
+  let cursorId = message.reply_to_message?.message_id;
+  const seen = new Set(cursorId ? [String(cursorId)] : []);
+
+  let rec = chatId && cursorId ? await getThread(chatId, cursorId) : null;
+  while (rec?.replyToId && budget > 0) {
+    const parentId = String(rec.replyToId);
+    if (seen.has(parentId)) break; // cycle — bail out.
+    seen.add(parentId);
+
+    const parent = await getThread(chatId, rec.replyToId);
+    if (!parent?.text) break; // missing/expired ancestor — chain stops here.
+    if (parent.text.length > budget) break; // would pass the cap — stop short.
+
+    budget -= parent.text.length;
+    chain.push({ name: parent.name, text: parent.text, self: parent.self });
+    rec = parent; // its own replyToId drives the next hop up.
+  }
+
+  return chain.reverse();
+};
+
 // -----------------------------------------------------------------------------
 // DEBUG MODE (admin only). When the admin includes `#debug` in the message that
 // addresses the bot, the bot runs the real pipeline but, instead of replying,
@@ -674,7 +739,7 @@ export const debugLine = (m) =>
  * @param {object|null} args.speaker  The speaker's PROFILE item.
  * @param {object|null} args.resolution  Name-resolution outcome for the message.
  * @param {Array|null} args.recentMessages  The rolling context buffer.
- * @param {object} [args.replyTo]  The replied-to message context, if any.
+ * @param {Array} [args.replyChain]  The replied-to thread (oldest-first), if any.
  * @param {string} args.profileSnippet  The speaker snippet sent to the model.
  * @param {string[]} [args.subjectSnippets]  Snippets for the people asked about.
  * @param {string} args.nameNote  The ambiguity note, if any.
@@ -685,7 +750,7 @@ const runDebug = async ({
   speaker,
   resolution,
   recentMessages,
-  replyTo,
+  replyChain,
   profileSnippet,
   subjectSnippets,
   nameNote,
@@ -719,7 +784,9 @@ const runDebug = async ({
       "گفتگوی اخیر (بافر):",
       ...(recentMessages?.length ? recentMessages.map(debugLine) : ["—"]),
       "",
-      `ریپلای‌به: ${replyTo ? debugLine(replyTo) : "—"}`,
+      `ریپلای‌به (رشته، قدیمی‌ترین اول): ${
+        replyChain?.length ? replyChain.map(debugLine).join(" ⤶ ") : "—"
+      }`,
       `OBS فعلیِ گوینده (${existingObs.length}): ${
         existingObs.length ? existingObs.join(" | ") : "—"
       }`,
@@ -729,7 +796,7 @@ const runDebug = async ({
   // 2) The reply call: exact prompts in, raw output out.
   const reply = await generateReply({
     recentMessages,
-    replyTo,
+    replyChain,
     profileSnippet,
     subjectSnippets,
     nameNote,
@@ -904,6 +971,25 @@ export const handler = async (event) => {
     }
   }
 
+  // Persist this message under its id, with a pointer to the message it replies
+  // to, so a later reply can be walked back up the thread (the rolling buffer
+  // above keeps no ids and only the last few entries). Best-effort; TTL-bounded.
+  if (message?.chat?.id && message?.message_id && messageText.trim()) {
+    try {
+      await recordThreadMessage(message.chat.id, message.message_id, {
+        name:
+          [message.from?.first_name, message.from?.last_name]
+            .filter(Boolean)
+            .join(" ")
+            .trim() || "یه نفر",
+        text: messageText,
+        replyToId: message.reply_to_message?.message_id,
+      });
+    } catch (err) {
+      console.error("Failed to record thread message:", err?.message);
+    }
+  }
+
   // Code-owned learning: every visible message teaches the name->person map and
   // the who-talks-to-whom edges (sender's own name, reply targets, text-mentions).
   // Runs for all traffic, not only when addressed, so weights improve over time.
@@ -983,9 +1069,10 @@ export const handler = async (event) => {
     console.error("Failed to resolve/read profile:", err?.message);
   }
 
-  // The message being replied to (if any), so the bot comments on the referenced
-  // post — not just on its own mention.
-  const replyTo = replyContextOf(message, process.env.BOT_USERNAME);
+  // The thread being replied to (if any), walked back toward its first post and
+  // capped by a char budget, so the bot comments on the referenced post *and* its
+  // context — not just on its own mention — without ballooning the prompt.
+  const replyChain = await loadReplyChain(message, process.env.BOT_USERNAME);
 
   // DEBUG MODE (admin only): if the admin put `#debug` in the triggering message,
   // run the same pipeline but, instead of replying, dump everything — the data
@@ -1000,7 +1087,7 @@ export const handler = async (event) => {
         speaker,
         resolution,
         recentMessages,
-        replyTo,
+        replyChain,
         profileSnippet,
         subjectSnippets,
         nameNote,
@@ -1025,7 +1112,7 @@ export const handler = async (event) => {
   try {
     const { text, observations, aliases, costEur } = await generateReply({
       recentMessages,
-      replyTo,
+      replyChain,
       profileSnippet,
       subjectSnippets,
       nameNote,
@@ -1035,13 +1122,28 @@ export const handler = async (event) => {
     // estimated euro cost from the call's token usage).
     await addMonthlySpend(costEur);
     if (text) {
-      await sendMessage(message.chat.id, text, message.message_id);
+      const sent = await sendMessage(message.chat.id, text, message.message_id);
       // Record our own reply into the rolling buffer so next turn the bot sees
       // what it already said. Best-effort: never let it look like a failed reply.
       try {
         await recordBotMessage(message.chat.id, text);
       } catch (err) {
         console.error("Failed to record bot message:", err?.message);
+      }
+      // Also store the reply under its own id (pointing at the message it answers)
+      // so when someone replies to the bot, the thread can be walked back up past
+      // the bot's line to the post it was reacting to. Best-effort.
+      if (sent?.message_id) {
+        try {
+          await recordThreadMessage(message.chat.id, sent.message_id, {
+            name: "فضول‌خان",
+            text,
+            self: true,
+            replyToId: message.message_id,
+          });
+        } catch (err) {
+          console.error("Failed to record bot thread message:", err?.message);
+        }
       }
     }
 

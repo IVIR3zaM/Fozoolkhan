@@ -14,6 +14,8 @@ const apiBase = () =>
  * @param {number} [replyToMessageId]  Message to reply to, if any.
  * @param {object} [replyMarkup]  Optional inline keyboard / reply markup (e.g.
  *   the approve/deny buttons sent to the admin when added to a group).
+ * @returns {Promise<object|undefined>} Telegram's `result` (the sent Message),
+ *   so callers can read the new `message_id`; undefined if the body had none.
  */
 export const sendMessage = async (
   chatId,
@@ -36,6 +38,15 @@ export const sendMessage = async (
     throw new Error(
       `Telegram sendMessage failed: ${response.status} ${detail}`,
     );
+  }
+
+  // The sent Message carries its new id, which the caller stores so a later reply
+  // can be walked back up the thread. Tolerant of a body-less stub/response.
+  try {
+    const data = await response.json();
+    return data?.result;
+  } catch {
+    return undefined;
   }
 };
 

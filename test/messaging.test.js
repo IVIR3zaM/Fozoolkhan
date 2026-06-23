@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import {
   shouldRespond,
   replyContextOf,
+  loadReplyChain,
   subjectSnippet,
   SUBJECT_OBS_FALLBACK,
   buildParticipantIndex,
@@ -143,6 +144,87 @@ test("replyContextOf: reads a replied-to media caption", () => {
     reply_to_message: { from: { first_name: "رضا" }, caption: "عکس" },
   };
   assert.equal(replyContextOf(msg, BOT).text, "عکس");
+});
+
+// loadReplyChain — reconstruct the reply thread back toward its first post,
+// stopping at the root or once the char budget would be exceeded. The store
+// reader is injected so these stay pure (no DynamoDB).
+
+// A tiny in-memory stand-in for getThreadMessage, keyed by message id.
+const fakeStore = (byId) => async (_chatId, id) => byId[id] ?? null;
+
+test("loadReplyChain: empty when the trigger isn't a reply", async () => {
+  const chain = await loadReplyChain({ text: "سلام" }, BOT, fakeStore({}));
+  assert.deepEqual(chain, []);
+});
+
+test("loadReplyChain: a lone reply with no stored ancestors is just that message", async () => {
+  const msg = {
+    chat: { id: 1 },
+    reply_to_message: { message_id: 10, from: { username: BOT }, text: "گفتم" },
+  };
+  const chain = await loadReplyChain(msg, BOT, fakeStore({}));
+  assert.deepEqual(chain, [{ name: "فضول‌خان", text: "گفتم", self: true }]);
+});
+
+test("loadReplyChain: walks ancestors and returns them oldest-first", async () => {
+  // Thread: علی(1) → bot(2, replies 1) → رضا replies to bot(2) now.
+  const msg = {
+    chat: { id: 1 },
+    reply_to_message: {
+      message_id: 2,
+      from: { username: BOT },
+      text: "جوابِ بات",
+    },
+  };
+  const store = fakeStore({
+    2: { name: "فضول‌خان", text: "جوابِ بات", self: true, replyToId: 1 },
+    1: { name: "علی", text: "ریشه", self: false, replyToId: null },
+  });
+  const chain = await loadReplyChain(msg, BOT, store, 1000);
+  assert.deepEqual(chain, [
+    { name: "علی", text: "ریشه", self: false },
+    { name: "فضول‌خان", text: "جوابِ بات", self: true },
+  ]);
+});
+
+test("loadReplyChain: stops before an ancestor that would exceed the budget", async () => {
+  const msg = {
+    chat: { id: 1 },
+    reply_to_message: {
+      message_id: 2,
+      from: { first_name: "رضا" },
+      text: "کوتاه",
+    },
+  };
+  const store = fakeStore({
+    2: { name: "رضا", text: "کوتاه", self: false, replyToId: 1 },
+    1: { name: "علی", text: "x".repeat(50), self: false, replyToId: null },
+  });
+  // Budget leaves room for "کوتاه" (5) but not the 50-char ancestor.
+  const chain = await loadReplyChain(msg, BOT, store, 10);
+  assert.deepEqual(chain, [{ name: "رضا", text: "کوتاه", self: false }]);
+});
+
+test("loadReplyChain: a cycle in the stored links can't loop forever", async () => {
+  const msg = {
+    chat: { id: 1 },
+    reply_to_message: {
+      message_id: 2,
+      from: { first_name: "رضا" },
+      text: "دو",
+    },
+  };
+  // 2 → 1 → 2 → ... (corrupt). The cycle guard must bail out.
+  const store = fakeStore({
+    2: { name: "رضا", text: "دو", self: false, replyToId: 1 },
+    1: { name: "علی", text: "یک", self: false, replyToId: 2 },
+  });
+  const chain = await loadReplyChain(msg, BOT, store, 1000);
+  assert.deepEqual(chain, [
+    { name: "علی", text: "یک", self: false },
+    { name: "رضا", text: "دو", self: false },
+  ]);
 });
 
 // subjectSnippet — what the bot is told about the person it's asked *about*.

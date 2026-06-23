@@ -182,9 +182,10 @@ const renderLine = (m) =>
  *
  * @param {object} ctx
  * @param {Array<{name: string, text: string, self?: boolean}>} [ctx.recentMessages]
- * @param {{name: string, text: string, self?: boolean}} [ctx.replyTo]  The
- *   message the triggering message is a reply to, so the bot comments on the
- *   actual referenced post — not just on its own mention.
+ * @param {Array<{name: string, text: string, self?: boolean}>} [ctx.replyChain]
+ *   The thread the triggering message replies to, oldest-first (the root-ward
+ *   ancestors first, the directly-replied-to message last), so the bot comments
+ *   on the actual referenced post — and its context — not just on its own mention.
  * @param {string} [ctx.profileSnippet]  Context about the *speaker* — the person
  *   the bot is replying to.
  * @param {string[]} [ctx.subjectSnippets]  Context about the people the speaker is
@@ -196,7 +197,7 @@ const renderLine = (m) =>
  */
 export const buildUserContent = ({
   recentMessages,
-  replyTo,
+  replyChain,
   profileSnippet,
   subjectSnippets,
   nameNote,
@@ -211,12 +212,18 @@ export const buildUserContent = ({
     for (const m of recentMessages) lines.push(renderLine(m));
   }
 
-  if (replyTo?.text) {
+  if (replyChain?.length) {
     lines.push("");
-    lines.push(
-      "این پیام، ریپلای به این پیامِ قبلیه؛ نظرت رو دقیقاً در موردِ همین بده:",
-    );
-    lines.push(renderLine(replyTo));
+    if (replyChain.length === 1) {
+      lines.push(
+        "این پیام، ریپلای به این پیامِ قبلیه؛ نظرت رو دقیقاً در موردِ همین بده:",
+      );
+    } else {
+      lines.push(
+        "این پیام ریپلای به یه رشته‌ی گفتگوئه (قدیمی‌ترین بالا، آخریش همون پیامیه که بهش ریپلای شده)؛ نظرت رو در موردِ همین رشته بده:",
+      );
+    }
+    for (const m of replyChain) lines.push(renderLine(m));
   }
 
   if (profileSnippet) {
@@ -265,8 +272,9 @@ export const buildUserContent = ({
  * @param {Array<{name: string, text: string, self?: boolean}>} [context.recentMessages]
  *   Last few messages, oldest first; the triggering message is the final entry.
  *   `self` marks the bot's own past lines.
- * @param {{name: string, text: string, self?: boolean}} [context.replyTo]  The
- *   message being replied to, so the bot comments on the referenced post.
+ * @param {Array<{name: string, text: string, self?: boolean}>} [context.replyChain]
+ *   The replied-to thread, oldest-first, so the bot comments on the referenced
+ *   post and its context.
  * @param {string} [context.profileSnippet]  Short note about the person the bot
  *   is replying to (the speaker, or the resolved subject of their question).
  * @param {string} [context.nameNote]  Optional code-owned note, e.g. an
