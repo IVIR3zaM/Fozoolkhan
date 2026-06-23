@@ -111,7 +111,7 @@ const snippetOf = (profile) =>
 
 // Pre-written Persian "broke until next month" line. Sent when the monthly
 // spend guard trips, instead of calling Bedrock. Funny, never apologetic.
-const BROKE_LINE =
+export const BROKE_LINE =
   "این ماه دیگه پولم ته کشید، تا اول ماه بعد مهمونِ سکوتمی 😅 ولی دلم باهاته.";
 
 // Telegram sends this header on every webhook request when a secret token is
@@ -136,7 +136,7 @@ const ok = { statusCode: 200, body: "" };
 
 // True when the given id is the configured admin. String-compared because env
 // vars are strings and Telegram ids arrive as numbers.
-const isAdmin = (userId) =>
+export const isAdmin = (userId) =>
   Boolean(process.env.ADMIN_USER_ID) &&
   String(userId) === String(process.env.ADMIN_USER_ID);
 
@@ -150,7 +150,7 @@ const CB_NOT_ADMIN = "این دکمه مال تو نیست 😅";
 
 // Inline keyboard for the admin's approve/deny DM. callback_data carries the
 // target chat id (well under Telegram's 64-byte limit).
-const approvalKeyboard = (chatId) => ({
+export const approvalKeyboard = (chatId) => ({
   inline_keyboard: [
     [
       { text: "✅ آره، فعال شو", callback_data: `approve:${chatId}` },
@@ -253,12 +253,13 @@ const STATUS_LABEL = {
   denied: "ردشده ❌",
   removed: "حذف‌شده 🚪",
 };
-const statusLabel = (status) => STATUS_LABEL[status] ?? `${status ?? "نامعلوم"} ❓`;
+export const statusLabel = (status) =>
+  STATUS_LABEL[status] ?? `${status ?? "نامعلوم"} ❓`;
 
 // The admin command set, registered with Telegram (setMyCommands) so the «/»
 // menu lists and autocompletes them natively. Descriptions are Persian, shown in
 // the client. Scoped to the admin's private chat so only the admin sees them.
-const ADMIN_COMMANDS = [
+export const ADMIN_COMMANDS = [
   { command: "groups", description: "گروه‌ها و وضعیت تأییدشون" },
   { command: "usage", description: "وضعیت اعتبار و خرجِ این ماه" },
   { command: "approve", description: "فعال‌کردن گروه (داخل گروه، یا با chat_id)" },
@@ -268,7 +269,7 @@ const ADMIN_COMMANDS = [
 
 // Persian help text listing what the admin can do. Mirrors ADMIN_COMMANDS plus
 // the debug flag, which is intentionally not a registered command.
-const ADMIN_HELP = [
+export const ADMIN_HELP = [
   "دستورهای مدیریتی فضول‌خان:",
   "/groups — لیست گروه‌ها و وضعیتشون، با دکمه‌ی تغییر",
   "/usage — خرج این ماه، باقی‌مونده و تاریخ ریست",
@@ -309,7 +310,7 @@ const GROUPS_FOOTER = "برای تغییر وضعیت، دکمه‌ی هر گر�
 // One alter-row per group for the `/groups` overview: tapping reuses the same
 // approve/deny callbacks the membership flow already handles. The group's title
 // (truncated) rides on the approve button so the admin can tell rows apart.
-const groupsKeyboard = (chats) => ({
+export const groupsKeyboard = (chats) => ({
   inline_keyboard: chats.map((c) => {
     const title = (c.title ?? String(c.chatId)).slice(0, 24);
     return [
@@ -327,7 +328,7 @@ const groupsKeyboard = (chats) => ({
  * @param {Array<{chatId: number|string, status: string, title?: string}>} chats
  * @returns {{text: string, replyMarkup?: object}}
  */
-const renderGroups = (chats) => {
+export const renderGroups = (chats) => {
   if (!chats.length) return { text: NO_GROUPS };
   const lines = chats.map(
     (c) => `• «${c.title ?? c.chatId}» — ${statusLabel(c.status)}`
@@ -340,7 +341,7 @@ const renderGroups = (chats) => {
 
 // First day of next month (UTC) as YYYY-MM-DD — when the monthly spend counter
 // rolls over to a fresh BUDGET item and the budget effectively resets.
-const monthlyResetDate = () => {
+export const monthlyResetDate = () => {
   const [year, month] = currentMonth().split("-").map(Number);
   // month is 1-based; Date's month arg is 0-based, so `month` is next month.
   return new Date(Date.UTC(year, month, 1)).toISOString().slice(0, 10);
@@ -355,7 +356,7 @@ const monthlyResetDate = () => {
  * @param {number} budget  The monthly ceiling in euros.
  * @returns {string}
  */
-const renderUsage = (spent, budget) => {
+export const renderUsage = (spent, budget) => {
   const remaining = Math.max(0, budget - spent);
   const overBudget = spent >= budget;
   return [
@@ -377,7 +378,7 @@ const renderUsage = (spent, budget) => {
  * @param {string} text  Message text or caption.
  * @returns {{cmd: string, arg: string}|null}
  */
-const parseCommand = (text) => {
+export const parseCommand = (text) => {
   const m = String(text ?? "")
     .trim()
     .match(/^\/([a-z_]+)(?:@\w+)?(?:\s+(.*))?$/i);
@@ -471,7 +472,7 @@ const handleAdminCommand = async (message) => {
  * @param {object} message  Telegram `message` object.
  * @param {string} botUsername  The bot's @username (without the leading @).
  */
-const shouldRespond = (message, botUsername) => {
+export const shouldRespond = (message, botUsername) => {
   if (!message || !botUsername) return false;
 
   // Private chats are admin-only by the time we get here, so answer directly —
@@ -508,7 +509,7 @@ const shouldRespond = (message, botUsername) => {
  * @param {string} botUsername  The bot's @username (without @).
  * @returns {{name: string, text: string, self: boolean}|undefined}
  */
-const replyContextOf = (message, botUsername) => {
+export const replyContextOf = (message, botUsername) => {
   const replied = message?.reply_to_message;
   const text = (replied?.text ?? replied?.caption ?? "").trim();
   if (!text) return undefined;
@@ -534,18 +535,18 @@ const replyContextOf = (message, botUsername) => {
 
 // The marker the admin appends to turn a normal mention into a debug run. Matched
 // as a standalone token so it never trips on substrings.
-const DEBUG_FLAG = /(^|\s)#debug(\s|$)/i;
+export const DEBUG_FLAG = /(^|\s)#debug(\s|$)/i;
 
 // True only for an admin message carrying the debug marker.
-const wantsDebug = (message) =>
+export const wantsDebug = (message) =>
   isAdmin(message?.from?.id) &&
   DEBUG_FLAG.test(message?.text ?? message?.caption ?? "");
 
 // Telegram caps a single message near 4096 chars; debug dumps can exceed that, so
 // split into chunks well under the limit. Only the first chunk threads under the
 // trigger, to keep the rest readable as a sequence.
-const TELEGRAM_CHUNK = 3800;
-const sendChunked = async (chatId, text, replyToMessageId) => {
+export const TELEGRAM_CHUNK = 3800;
+export const sendChunked = async (chatId, text, replyToMessageId) => {
   for (let i = 0; i < text.length; i += TELEGRAM_CHUNK) {
     await sendMessage(
       chatId,
@@ -556,7 +557,7 @@ const sendChunked = async (chatId, text, replyToMessageId) => {
 };
 
 // Render one recent-buffer line the way the model sees it, for the dump.
-const debugLine = (m) =>
+export const debugLine = (m) =>
   m?.self ? `فضول‌خان (خود بات): ${m.text}` : `${m?.name ?? "یه نفر"}: ${m?.text}`;
 
 /**

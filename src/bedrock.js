@@ -124,7 +124,7 @@ const renderLine = (m) =>
  * @param {string} [ctx.nameNote]  Optional code-owned note (e.g. an ambiguity hint).
  * @returns {string}
  */
-const buildUserContent = ({
+export const buildUserContent = ({
   recentMessages,
   replyTo,
   profileSnippet,

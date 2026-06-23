@@ -63,6 +63,19 @@ so the source carries no political baggage if read.)
   pre-written Persian line and do not call Bedrock.
 - Increment the counter after every successful call.
 
+## Tests
+
+- Run `npm test` (`node --test`, no extra deps) before finishing a change; keep
+  it green. Tests live in `test/` and cover the behaviour that must not silently
+  drift: the messaging trigger (`shouldRespond`/`replyContextOf`), the admin
+  surface (command parsing, `/groups` + `/usage` rendering, approval keyboards),
+  the `#debug` harness (trigger detection + chunked dump), and the model-facing
+  prompt/observation contract.
+- Tests exercise pure, exported helpers and the Telegram layer via a stubbed
+  `global.fetch` — they never touch AWS. When you add an admin command, change a
+  reply trigger, or alter the prompt structure, add/adjust a test in the same
+  change so the guarantee stays honest.
+
 ## Working style
 
 - Implement **one milestone per run** (see [ITERATIONS.md](ITERATIONS.md)).
