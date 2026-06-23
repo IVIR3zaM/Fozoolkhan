@@ -26,6 +26,7 @@ import {
   GetCommand,
   PutCommand,
   QueryCommand,
+  ScanCommand,
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 
@@ -269,6 +270,43 @@ export const setChatAccess = async (chatId, status, title) => {
       ExpressionAttributeValues: values,
     })
   );
+};
+
+/**
+ * List every chat access record we hold (one per group the bot has ever been
+ * added to), newest activity first. Code-owned admin read: the table is tiny and
+ * reconstructable, so a filtered Scan for the `ACCESS` items is cheap and avoids
+ * needing a secondary index. Used by the admin `/groups` overview.
+ *
+ * @returns {Promise<Array<{chatId: number|string, status: string,
+ *   title?: string, last_updated?: string}>>}
+ */
+export const listChatAccess = async () => {
+  const items = [];
+  let startKey;
+  do {
+    const { Items, LastEvaluatedKey } = await docClient.send(
+      new ScanCommand({
+        TableName: tableName(),
+        FilterExpression: "SK = :access",
+        ExpressionAttributeValues: { ":access": "ACCESS" },
+        ExclusiveStartKey: startKey,
+      })
+    );
+    for (const i of Items ?? []) {
+      items.push({
+        chatId: String(i.PK ?? "").replace(/^CHAT#/, ""),
+        status: i.status,
+        title: i.title,
+        last_updated: i.last_updated,
+      });
+    }
+    startKey = LastEvaluatedKey;
+  } while (startKey);
+
+  // Most recently touched first, so the admin sees fresh activity at the top.
+  items.sort((a, b) => String(b.last_updated ?? "").localeCompare(a.last_updated ?? ""));
+  return items;
 };
 
 /**

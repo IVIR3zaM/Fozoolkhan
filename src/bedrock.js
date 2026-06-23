@@ -179,12 +179,14 @@ const buildUserContent = ({
  *   is replying to (the speaker, or the resolved subject of their question).
  * @param {string} [context.nameNote]  Optional code-owned note, e.g. an
  *   ambiguity hint when a spoken name matched several people.
- * @returns {Promise<{text: string, observations: Array<{name: string, note: string}>, costEur: number}>}
+ * @returns {Promise<{text: string, observations: Array<{name: string, note: string}>, costEur: number, systemPrompt: string, userPrompt: string, raw: string}>}
  *   The bot's Persian reply, zero or more observations each tagged with the spoken
  *   name of the person they're about (code resolves the name to a user id), and an
- *   estimated euro cost (for the monthly spend counter).
+ *   estimated euro cost (for the monthly spend counter). The exact prompts sent and
+ *   the raw completion are also returned, for the admin debug dump.
  */
 export const generateReply = async (context = {}) => {
+  const userPrompt = buildUserContent(context);
   const command = new InvokeModelCommand({
     modelId: modelId(),
     contentType: "application/json",
@@ -193,7 +195,7 @@ export const generateReply = async (context = {}) => {
       anthropic_version: "bedrock-2023-05-31",
       max_tokens: maxTokens(),
       system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: buildUserContent(context) }],
+      messages: [{ role: "user", content: userPrompt }],
     }),
   });
 
@@ -208,7 +210,14 @@ export const generateReply = async (context = {}) => {
   const text = replyPart.trim();
   const observations = parseObservationBlock(obsParts.join(OBS_DELIMITER));
 
-  return { text, observations, costEur };
+  return {
+    text,
+    observations,
+    costEur,
+    systemPrompt: SYSTEM_PROMPT,
+    userPrompt,
+    raw,
+  };
 };
 
 /**
@@ -220,8 +229,9 @@ export const generateReply = async (context = {}) => {
  * @param {object} input
  * @param {string} [input.summary]  The person's current summary, if any.
  * @param {string[]} [input.observations]  Accumulated one-line observations.
- * @returns {Promise<{summary: string, costEur: number}>} The compressed summary
- *   and an estimated euro cost (for the monthly spend counter).
+ * @returns {Promise<{summary: string, costEur: number, systemPrompt: string, userPrompt: string}>}
+ *   The compressed summary, an estimated euro cost (for the monthly spend
+ *   counter), and the exact prompts sent (for the admin debug dump).
  */
 export const summarizeObservations = async ({ summary, observations } = {}) => {
   const lines = [];
@@ -234,6 +244,7 @@ export const summarizeObservations = async ({ summary, observations } = {}) => {
   for (const o of observations ?? []) lines.push(`- ${o}`);
   lines.push("");
   lines.push("خلاصه‌ی به‌روزشده را در دو-سه جمله بنویس.");
+  const userPrompt = lines.join("\n");
 
   const command = new InvokeModelCommand({
     modelId: modelId(),
@@ -243,12 +254,17 @@ export const summarizeObservations = async ({ summary, observations } = {}) => {
       anthropic_version: "bedrock-2023-05-31",
       max_tokens: maxTokens(),
       system: SUMMARY_SYSTEM_PROMPT,
-      messages: [{ role: "user", content: lines.join("\n") }],
+      messages: [{ role: "user", content: userPrompt }],
     }),
   });
 
   const response = await client.send(command);
   const payload = JSON.parse(Buffer.from(response.body).toString("utf8"));
   const { text, costEur } = parseCompletion(payload);
-  return { summary: text, costEur };
+  return {
+    summary: text,
+    costEur,
+    systemPrompt: SUMMARY_SYSTEM_PROMPT,
+    userPrompt,
+  };
 };

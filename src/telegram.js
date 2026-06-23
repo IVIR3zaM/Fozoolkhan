@@ -38,6 +38,31 @@ export const sendMessage = async (
 };
 
 /**
+ * Register the bot's slash-command list with Telegram so the client shows them
+ * natively in the «/» command menu and autocompletes them. An optional `scope`
+ * narrows who sees them (e.g. a single chat, so admin-only commands surface only
+ * in the admin's DM). Best-effort — registration failing must not break a reply.
+ *
+ * @param {Array<{command: string, description: string}>} commands  Command list.
+ * @param {object} [scope]  Telegram BotCommandScope (e.g. {type:"chat",chat_id}).
+ */
+export const setMyCommands = async (commands, scope) => {
+  const body = { commands };
+  if (scope) body.scope = scope;
+
+  const response = await fetch(`${apiBase()}/setMyCommands`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`Telegram setMyCommands failed: ${response.status} ${detail}`);
+  }
+};
+
+/**
  * Acknowledge a tapped inline button. Telegram shows a brief toast with `text`
  * and stops the button's loading spinner; without this the client spins until it
  * times out. Best-effort — a failure here must not break the approval flow.

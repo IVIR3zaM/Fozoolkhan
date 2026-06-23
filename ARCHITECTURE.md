@@ -55,6 +55,17 @@ Lambda (Function URL)
           approve/deny buttons. callback_query → only the admin may resolve it.
         - Private chat → answer only ADMIN_USER_ID. Group → only if its CHAT#
           ACCESS status is approved. Unauthorized → 200 OK, no record/learn/LLM.
+        - Admin slash-commands (run before the gate, admin only, no Bedrock):
+          /approve, /deny (alter a chat's ACCESS); /groups (list every CHAT#
+          ACCESS with status + inline alter buttons); /usage (alias /credit) →
+          this month's spend, ceiling, remaining, and reset date; /start, /help
+          (show help). These are registered with Telegram via setMyCommands
+          (scoped to the admin's DM) so the native «/» menu autocompletes them.
+        - Admin debug mode: an addressed admin message containing `#debug` runs
+          the normal pipeline but, instead of replying, dumps the DB inputs, the
+          exact system/user prompts, and the model output for both the reply and
+          a DRY-RUN summary. Nothing is persisted (no observation/summary write);
+          the real Bedrock calls are still counted against the spend guard.
    2. Parse update. Should we respond?
         - private chat (admin only past the gate) → always, OR
         - bot was @-mentioned, OR

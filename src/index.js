@@ -26,6 +26,8 @@ import {
   setProfileSummary,
   getChatAccess,
   setChatAccess,
+  listChatAccess,
+  currentMonth,
 } from "./db.js";
 import {
   resolveName,
@@ -34,7 +36,11 @@ import {
   learnFromMessage,
 } from "./names.js";
 import { generateReply, summarizeObservations } from "./bedrock.js";
-import { sendMessage, answerCallbackQuery } from "./telegram.js";
+import {
+  sendMessage,
+  answerCallbackQuery,
+  setMyCommands,
+} from "./telegram.js";
 
 // How many observations accumulate before the occasional summarization step
 // folds them into a person's profile summary. Frugal: summarization is itself a
@@ -238,6 +244,132 @@ const CMD_APPROVED = "فعال شد ✅ از این به بعد اینجا هس�
 const CMD_DENIED = "باشه، اینجا ساکت می‌مونم.";
 const CMD_NEED_ID = "از داخل خود گروه بزن، یا: /approve <chat_id>";
 
+// Human-readable Persian label for a chat's access status, for the admin's
+// `/groups` overview. Code-owned: the statuses are the same allowlist values
+// setChatAccess writes (pending | approved | denied | removed).
+const STATUS_LABEL = {
+  approved: "فعال ✅",
+  pending: "در انتظار تأیید ⏳",
+  denied: "ردشده ❌",
+  removed: "حذف‌شده 🚪",
+};
+const statusLabel = (status) => STATUS_LABEL[status] ?? `${status ?? "نامعلوم"} ❓`;
+
+// The admin command set, registered with Telegram (setMyCommands) so the «/»
+// menu lists and autocompletes them natively. Descriptions are Persian, shown in
+// the client. Scoped to the admin's private chat so only the admin sees them.
+const ADMIN_COMMANDS = [
+  { command: "groups", description: "گروه‌ها و وضعیت تأییدشون" },
+  { command: "usage", description: "وضعیت اعتبار و خرجِ این ماه" },
+  { command: "approve", description: "فعال‌کردن گروه (داخل گروه، یا با chat_id)" },
+  { command: "deny", description: "ساکت‌کردن گروه (داخل گروه، یا با chat_id)" },
+  { command: "help", description: "راهنمای دستورها" },
+];
+
+// Persian help text listing what the admin can do. Mirrors ADMIN_COMMANDS plus
+// the debug flag, which is intentionally not a registered command.
+const ADMIN_HELP = [
+  "دستورهای مدیریتی فضول‌خان:",
+  "/groups — لیست گروه‌ها و وضعیتشون، با دکمه‌ی تغییر",
+  "/usage — خرج این ماه، باقی‌مونده و تاریخ ریست",
+  "/approve — فعال‌کردن گروه (داخل گروه بزن، یا تو دایرکت: /approve <chat_id>)",
+  "/deny — ساکت‌کردن گروه (مثل بالا)",
+  "",
+  "حالت دیباگ: هر وقت توی پیامت که منو صدا می‌زنی «#debug» بذاری، به‌جای جواب عادی،",
+  "همه‌ی دیتای خونده‌شده از دیتابیس، پرامپت‌ها و خروجی مدل (هم جواب هم خلاصه) رو",
+  "برات می‌فرستم. تو این حالت خلاصه ذخیره نمی‌شه و چیزی یاد نمی‌گیرم — فقط تست.",
+].join("\n");
+
+// Registering the command menu is idempotent but a network call, so do it at
+// most once per warm Lambda container. Flipped after the first successful call.
+let commandsRegistered = false;
+
+/**
+ * Ensure the native command menu is registered for the admin's DM. Idempotent and
+ * cheap after the first call in a container. Best-effort: a failure never blocks
+ * the command the admin actually ran.
+ */
+const ensureAdminCommands = async () => {
+  if (commandsRegistered || !process.env.ADMIN_USER_ID) return;
+  try {
+    await setMyCommands(ADMIN_COMMANDS, {
+      type: "chat",
+      chat_id: Number(process.env.ADMIN_USER_ID),
+    });
+    commandsRegistered = true;
+  } catch (err) {
+    console.error("Failed to register admin commands:", err?.message);
+  }
+};
+
+const NO_GROUPS = "هنوز تو هیچ گروهی نیستم 🤷";
+const GROUPS_HEADER = "گروه‌هایی که منو اضافه کردن:";
+const GROUPS_FOOTER = "برای تغییر وضعیت، دکمه‌ی هر گروه رو بزن:";
+
+// One alter-row per group for the `/groups` overview: tapping reuses the same
+// approve/deny callbacks the membership flow already handles. The group's title
+// (truncated) rides on the approve button so the admin can tell rows apart.
+const groupsKeyboard = (chats) => ({
+  inline_keyboard: chats.map((c) => {
+    const title = (c.title ?? String(c.chatId)).slice(0, 24);
+    return [
+      { text: `✅ ${title}`, callback_data: `approve:${c.chatId}` },
+      { text: "❌", callback_data: `deny:${c.chatId}` },
+    ];
+  }),
+});
+
+/**
+ * Render the admin `/groups` overview: every chat the bot has been added to, with
+ * its current approval status, plus inline buttons to flip each one. Pure
+ * formatting over the code-owned access records — no Bedrock, no LLM.
+ *
+ * @param {Array<{chatId: number|string, status: string, title?: string}>} chats
+ * @returns {{text: string, replyMarkup?: object}}
+ */
+const renderGroups = (chats) => {
+  if (!chats.length) return { text: NO_GROUPS };
+  const lines = chats.map(
+    (c) => `• «${c.title ?? c.chatId}» — ${statusLabel(c.status)}`
+  );
+  return {
+    text: `${GROUPS_HEADER}\n\n${lines.join("\n")}\n\n${GROUPS_FOOTER}`,
+    replyMarkup: groupsKeyboard(chats),
+  };
+};
+
+// First day of next month (UTC) as YYYY-MM-DD — when the monthly spend counter
+// rolls over to a fresh BUDGET item and the budget effectively resets.
+const monthlyResetDate = () => {
+  const [year, month] = currentMonth().split("-").map(Number);
+  // month is 1-based; Date's month arg is 0-based, so `month` is next month.
+  return new Date(Date.UTC(year, month, 1)).toISOString().slice(0, 10);
+};
+
+/**
+ * Render the admin credit-usage summary for the current month: spent so far, the
+ * ceiling, what's left, and when it resets. Pure formatting over the code-owned
+ * spend counter — no Bedrock.
+ *
+ * @param {number} spent  Euros spent this month.
+ * @param {number} budget  The monthly ceiling in euros.
+ * @returns {string}
+ */
+const renderUsage = (spent, budget) => {
+  const remaining = Math.max(0, budget - spent);
+  const overBudget = spent >= budget;
+  return [
+    `وضعیت اعتبار (ماه ${currentMonth()}):`,
+    `• خرج‌شده: ${spent.toFixed(2)} یورو`,
+    `• سقف ماهانه: ${budget.toFixed(2)} یورو`,
+    `• باقی‌مونده: ${remaining.toFixed(2)} یورو`,
+    `• ریست: ${monthlyResetDate()} (اول ماه بعد)`,
+    overBudget ? "\nاین ماه ته کشید 😅 تا ریست مهمونِ سکوتم‌این." : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+};
+
 /**
  * Parse a slash-command, tolerating Telegram's `/cmd@botname` form and an
  * optional argument. Returns null if the text isn't a command.
@@ -266,7 +398,38 @@ const parseCommand = (text) => {
 const handleAdminCommand = async (message) => {
   if (!isAdmin(message?.from?.id)) return false;
   const parsed = parseCommand(message.text ?? message.caption);
-  if (!parsed || (parsed.cmd !== "approve" && parsed.cmd !== "deny")) {
+  if (!parsed) return false;
+
+  // First admin command in this container also registers the native menu, so the
+  // «/» autocomplete populates without the admin having to run /start first.
+  await ensureAdminCommands();
+
+  // /start or /help: reply with the help text (the menu is already registered
+  // above). /start is Telegram's conventional first command for any bot.
+  if (parsed.cmd === "start" || parsed.cmd === "help") {
+    await sendMessage(message.chat.id, ADMIN_HELP, message.message_id);
+    return true;
+  }
+
+  // Read-only admin overviews: the group list (with alter buttons) and the
+  // monthly credit usage. No Bedrock — pure reads over code-owned state.
+  if (parsed.cmd === "groups") {
+    const { text, replyMarkup } = renderGroups(await listChatAccess());
+    await sendMessage(message.chat.id, text, message.message_id, replyMarkup);
+    return true;
+  }
+  if (parsed.cmd === "usage" || parsed.cmd === "credit") {
+    const budget = Number(process.env.MONTHLY_BUDGET_EUR ?? 5);
+    const spent = await getMonthlySpend();
+    await sendMessage(
+      message.chat.id,
+      renderUsage(spent, budget),
+      message.message_id
+    );
+    return true;
+  }
+
+  if (parsed.cmd !== "approve" && parsed.cmd !== "deny") {
     return false;
   }
 
@@ -358,6 +521,172 @@ const replyContextOf = (message, botUsername) => {
         .join(" ")
         .trim() || "یه نفر";
   return { name, text, self };
+};
+
+// -----------------------------------------------------------------------------
+// DEBUG MODE (admin only). When the admin includes `#debug` in the message that
+// addresses the bot, the bot runs the real pipeline but, instead of replying,
+// returns a full dump: the data read from the DB, the exact system/user prompts,
+// and the model output for both the reply and a *dry-run* summary that is NOT
+// persisted. It's a testing harness — nothing is learned or saved (the spend
+// counter is still incremented, since real Bedrock calls really happened).
+// -----------------------------------------------------------------------------
+
+// The marker the admin appends to turn a normal mention into a debug run. Matched
+// as a standalone token so it never trips on substrings.
+const DEBUG_FLAG = /(^|\s)#debug(\s|$)/i;
+
+// True only for an admin message carrying the debug marker.
+const wantsDebug = (message) =>
+  isAdmin(message?.from?.id) &&
+  DEBUG_FLAG.test(message?.text ?? message?.caption ?? "");
+
+// Telegram caps a single message near 4096 chars; debug dumps can exceed that, so
+// split into chunks well under the limit. Only the first chunk threads under the
+// trigger, to keep the rest readable as a sequence.
+const TELEGRAM_CHUNK = 3800;
+const sendChunked = async (chatId, text, replyToMessageId) => {
+  for (let i = 0; i < text.length; i += TELEGRAM_CHUNK) {
+    await sendMessage(
+      chatId,
+      text.slice(i, i + TELEGRAM_CHUNK),
+      i === 0 ? replyToMessageId : undefined
+    );
+  }
+};
+
+// Render one recent-buffer line the way the model sees it, for the dump.
+const debugLine = (m) =>
+  m?.self ? `فضول‌خان (خود بات): ${m.text}` : `${m?.name ?? "یه نفر"}: ${m?.text}`;
+
+/**
+ * Run the admin debug pipeline: generate the reply (real Bedrock call) and a
+ * dry-run summary for the speaker, then dump every input and output. Saves
+ * nothing — not the observations, not the summary. The real call costs are still
+ * added to the monthly counter (honest accounting; the spend guard already let
+ * us through above).
+ *
+ * @param {object} args
+ * @param {object} args.message  The triggering Telegram message.
+ * @param {object|null} args.speaker  The speaker's PROFILE item.
+ * @param {object|null} args.resolution  Name-resolution outcome for the message.
+ * @param {Array|null} args.recentMessages  The rolling context buffer.
+ * @param {object} [args.replyTo]  The replied-to message context, if any.
+ * @param {string} args.profileSnippet  The snippet that would be sent to the model.
+ * @param {string} args.nameNote  The ambiguity note, if any.
+ */
+const runDebug = async ({
+  message,
+  speaker,
+  resolution,
+  recentMessages,
+  replyTo,
+  profileSnippet,
+  nameNote,
+}) => {
+  const speakerId = message.from?.id;
+  const sections = ["🐞 حالت دیباگ — هیچی ذخیره نمی‌شه\n"];
+
+  // 1) What we read from the DB / system before any model call.
+  const spent = await getMonthlySpend();
+  const existingObs = speakerId ? await getObservations(speakerId) : [];
+  sections.push(
+    [
+      "== ورودی (از دیتابیس و سیستم) ==",
+      `چت: type=${message.chat?.type} id=${message.chat?.id}`,
+      `گوینده: id=${speakerId} | نام‌ها=${(speaker?.names_seen ?? []).join(", ") || "—"}`,
+      `خلاصه‌ی فعلیِ گوینده: ${speaker?.summary || "—"}`,
+      `name resolution: ${resolution ? JSON.stringify(resolution) : "—"}`,
+      `nameNote: ${nameNote || "—"}`,
+      `profileSnippet (که به مدل می‌ره): ${profileSnippet || "—"}`,
+      `خرج این ماه: ${spent.toFixed(4)} از ${Number(
+        process.env.MONTHLY_BUDGET_EUR ?? 5
+      ).toFixed(2)} یورو`,
+      "",
+      "گفتگوی اخیر (بافر):",
+      ...(recentMessages?.length ? recentMessages.map(debugLine) : ["—"]),
+      "",
+      `ریپلای‌به: ${replyTo ? debugLine(replyTo) : "—"}`,
+      `OBS فعلیِ گوینده (${existingObs.length}): ${
+        existingObs.length ? existingObs.join(" | ") : "—"
+      }`,
+    ].join("\n")
+  );
+
+  // 2) The reply call: exact prompts in, raw output out.
+  const reply = await generateReply({
+    recentMessages,
+    replyTo,
+    profileSnippet,
+    nameNote,
+  });
+  await addMonthlySpend(reply.costEur); // honest accounting: the call happened.
+  sections.push(
+    [
+      "== فراخوانِ جواب (REPLY) ==",
+      "--- system prompt ---",
+      reply.systemPrompt,
+      "",
+      "--- user prompt ---",
+      reply.userPrompt,
+      "",
+      "--- خروجی خام مدل ---",
+      reply.raw || "—",
+      "",
+      `جوابِ تمیزشده: ${reply.text || "—"}`,
+      `observations (parse‌شده): ${
+        reply.observations.length
+          ? reply.observations
+              .map((o) => `${o.name} → ${o.note}`)
+              .join(" | ")
+          : "—"
+      }`,
+      `هزینه: ${reply.costEur.toFixed(5)} یورو`,
+    ].join("\n")
+  );
+
+  // 3) The summary call — a DRY RUN for the speaker, mirroring maybeSummarize but
+  // never persisted. Build the same input it would get: the speaker's existing
+  // observations plus any note from this turn that resolves to the speaker.
+  const newNotesAboutSpeaker = [];
+  for (const { name, note } of reply.observations) {
+    const targetId = await resolveObservationTarget(
+      message.from,
+      name,
+      process.env.BOT_USERNAME
+    );
+    if (String(targetId) === String(speakerId)) newNotesAboutSpeaker.push(note);
+  }
+  const summaryInput = [...existingObs, ...newNotesAboutSpeaker];
+
+  if (summaryInput.length) {
+    const sum = await summarizeObservations({
+      summary: speaker?.summary,
+      observations: summaryInput,
+    });
+    await addMonthlySpend(sum.costEur); // the call happened — count it.
+    sections.push(
+      [
+        "== فراخوانِ خلاصه (SUMMARY — dry-run، ذخیره نشد) ==",
+        `هدف: گوینده id=${speakerId}`,
+        "--- system prompt ---",
+        sum.systemPrompt,
+        "",
+        "--- user prompt ---",
+        sum.userPrompt,
+        "",
+        "--- خلاصه‌ی جدید (ذخیره نمی‌شه) ---",
+        sum.summary || "—",
+        `هزینه: ${sum.costEur.toFixed(5)} یورو`,
+      ].join("\n")
+    );
+  } else {
+    sections.push(
+      "== فراخوانِ خلاصه ==\nنکته‌ای برای خلاصه‌کردنِ گوینده نبود؛ این مرحله رد شد."
+    );
+  }
+
+  await sendChunked(message.chat.id, sections.join("\n\n"), message.message_id);
 };
 
 /**
@@ -490,11 +819,13 @@ export const handler = async (event) => {
   // the LLM an ambiguity note so the "which one?" becomes the joke.
   let profileSnippet = "";
   let nameNote = "";
+  let speaker = null; // kept for the debug dump (the speaker's full profile).
+  let resolution = null; // kept for the debug dump (name-resolution outcome).
   try {
-    const speaker = await recordSighting(message.from);
+    speaker = await recordSighting(message.from);
     profileSnippet = snippetOf(speaker);
 
-    const resolution = await resolveName(
+    resolution = await resolveName(
       message.from?.id,
       messageText,
       process.env.BOT_USERNAME
@@ -515,6 +846,36 @@ export const handler = async (event) => {
   // The message being replied to (if any), so the bot comments on the referenced
   // post — not just on its own mention.
   const replyTo = replyContextOf(message, process.env.BOT_USERNAME);
+
+  // DEBUG MODE (admin only): if the admin put `#debug` in the triggering message,
+  // run the same pipeline but, instead of replying, dump everything — the data
+  // read from the DB, the exact prompts, and the model output for both the reply
+  // and the (dry-run) summary. Nothing is saved (the summary in particular), so
+  // it's a safe testing harness. The spend guard above still applies; the real
+  // Bedrock calls are still counted (honest accounting — see AGENTS.md).
+  if (wantsDebug(message)) {
+    try {
+      await runDebug({
+        message,
+        speaker,
+        resolution,
+        recentMessages,
+        replyTo,
+        profileSnippet,
+        nameNote,
+      });
+    } catch (err) {
+      console.error("Debug run failed:", err?.message);
+      try {
+        await sendMessage(
+          message.chat.id,
+          `دیباگ خطا خورد: ${err?.message ?? err}`,
+          message.message_id
+        );
+      } catch {}
+    }
+    return ok;
+  }
 
   // Generate an in-character Persian reply from the assembled context and send
   // it back, threaded under the triggering message. Errors are swallowed so
