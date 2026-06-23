@@ -16,11 +16,17 @@ export const config = {
   // Hard cap on response length to keep token spend down.
   MAX_RESPONSE_TOKENS: 300,
 
-  // Per-1K-token prices in euros, used to estimate each call's cost for the
-  // monthly spend counter. Defaults match Claude 3.5 Haiku on Bedrock; adjust
-  // if the model or EUR/USD rate changes.
-  BEDROCK_INPUT_PRICE_PER_1K_EUR: 0.0008,
-  BEDROCK_OUTPUT_PRICE_PER_1K_EUR: 0.004,
+  // Cost estimation. Each call's euro cost (for the monthly spend counter and the
+  // /usage comparison) is derived from BEDROCK_MODEL_ID via the price catalog in
+  // src/pricing.js — so changing the model re-prices automatically. USD_TO_EUR is
+  // the conversion factor applied to the catalog's USD list prices.
+  USD_TO_EUR: 0.92,
+
+  // Fallback per-1K-token prices in euros, used ONLY when BEDROCK_MODEL_ID isn't a
+  // model the catalog recognizes. For known models the catalog wins. Defaults
+  // match Claude Haiku 4.5 ($1/$5 per million at the factor above).
+  BEDROCK_INPUT_PRICE_PER_1K_EUR: 0.00092,
+  BEDROCK_OUTPUT_PRICE_PER_1K_EUR: 0.0046,
 
   // How many recent messages to include as context (never full history).
   CONTEXT_MESSAGE_COUNT: 5,

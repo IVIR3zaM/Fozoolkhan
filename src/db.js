@@ -409,21 +409,57 @@ export const getMonthlySpend = async (month = currentMonth()) => {
 };
 
 /**
- * Atomically add to the month's spend estimate after a successful Bedrock call.
- * Uses a DynamoDB `ADD` so concurrent Lambda invocations can't clobber each
- * other. Never called when the guard has blocked a call (nothing was spent).
+ * Read the full running usage for a month: euros spent plus the raw input/output
+ * token totals. The token totals let the admin `/usage` view re-price the same
+ * usage against other models. Defaults to zeroes when the month has no item yet
+ * (and for months recorded before token tracking existed, the tokens read as 0).
  *
- * @param {number} amountEur  Estimated euro cost of the call (must be > 0).
+ * @param {string} [month]  `YYYY-MM`; defaults to the current month.
+ * @returns {Promise<{spendEur: number, inputTokens: number, outputTokens: number}>}
+ */
+export const getMonthlyUsage = async (month = currentMonth()) => {
+  const { Item } = await docClient.send(
+    new GetCommand({ TableName: tableName(), Key: budgetKey(month) }),
+  );
+  return {
+    spendEur: Number(Item?.spend_eur ?? 0),
+    inputTokens: Number(Item?.in_tokens ?? 0),
+    outputTokens: Number(Item?.out_tokens ?? 0),
+  };
+};
+
+/**
+ * Atomically add to the month's spend estimate and token totals after a
+ * successful Bedrock call. Uses a DynamoDB `ADD` so concurrent Lambda invocations
+ * can't clobber each other. Never called when the guard has blocked a call
+ * (nothing was spent). The token totals feed the per-model cost comparison.
+ *
+ * @param {number} amountEur  Estimated euro cost of the call.
+ * @param {number} [inputTokens]  Input tokens the call consumed.
+ * @param {number} [outputTokens]  Output tokens the call produced.
  * @param {string} [month]  `YYYY-MM`; defaults to the current month.
  */
-export const addMonthlySpend = async (amountEur, month = currentMonth()) => {
-  if (!(amountEur > 0)) return;
+export const addMonthlySpend = async (
+  amountEur,
+  inputTokens = 0,
+  outputTokens = 0,
+  month = currentMonth(),
+) => {
+  const amt = Number(amountEur) || 0;
+  const inTok = Number(inputTokens) || 0;
+  const outTok = Number(outputTokens) || 0;
+  if (amt <= 0 && inTok <= 0 && outTok <= 0) return;
   await docClient.send(
     new UpdateCommand({
       TableName: tableName(),
       Key: budgetKey(month),
-      UpdateExpression: "ADD spend_eur :amt",
-      ExpressionAttributeValues: { ":amt": amountEur },
+      UpdateExpression:
+        "ADD spend_eur :amt, in_tokens :in_tok, out_tokens :out_tok",
+      ExpressionAttributeValues: {
+        ":amt": amt,
+        ":in_tok": inTok,
+        ":out_tok": outTok,
+      },
     }),
   );
 };

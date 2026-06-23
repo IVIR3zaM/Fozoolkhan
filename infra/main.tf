@@ -172,6 +172,7 @@ resource "aws_lambda_function" "bot" {
       CONTEXT_MESSAGE_COUNT           = tostring(var.context_message_count)
       OBS_TTL_DAYS                    = tostring(var.obs_ttl_days)
       OBS_SUMMARY_THRESHOLD           = tostring(var.obs_summary_threshold)
+      USD_TO_EUR                      = tostring(var.usd_to_eur)
       BEDROCK_INPUT_PRICE_PER_1K_EUR  = tostring(var.bedrock_input_price_per_1k_eur)
       BEDROCK_OUTPUT_PRICE_PER_1K_EUR = tostring(var.bedrock_output_price_per_1k_eur)
     }

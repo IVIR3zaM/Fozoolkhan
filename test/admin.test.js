@@ -11,6 +11,7 @@ import {
   parseCommand,
   renderGroups,
   renderUsage,
+  renderModelComparison,
   statusLabel,
   approvalKeyboard,
   groupsKeyboard,
@@ -114,6 +115,50 @@ test("renderUsage: clamps remaining at zero and flags over-budget", () => {
   const text = renderUsage(7, 5);
   assert.match(text, /0\.00/); // remaining clamped
   assert.match(text, /ته کشید/); // over-budget note present
+});
+
+test("renderUsage: appends the model comparison table", () => {
+  const text = renderUsage(1.5, 5, { inputTokens: 1_000_000, outputTokens: 0 });
+  assert.match(text, /Claude Haiku 4\.x/);
+  assert.match(text, /Claude Sonnet 4\.x/);
+  assert.match(text, /Claude Opus 4\.x/);
+});
+
+test("renderModelComparison: token-based projection when tokens are recorded", () => {
+  process.env.USD_TO_EUR = "0.92"; // pin FX so the numbers are deterministic
+  // 1M input + 200K output: Haiku 1.84, Sonnet 5.52 (+3.68), Opus 9.20 (+7.36).
+  const text = renderModelComparison(
+    0, // spend ignored once tokens are present
+    1_000_000,
+    200_000,
+    "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+  );
+  assert.match(text, /Claude Haiku 4\.x — \$1\/\$5.*الان ✅/);
+  assert.match(text, /1\.84 یورو/); // current projected cost
+  assert.match(text, /5\.52 یورو \(\+3\.68/); // sonnet, dearer
+  assert.match(text, /9\.20 یورو \(\+7\.36/); // opus, dearest
+  assert.match(text, /ورودی=1000000 خروجی=200000/); // token basis surfaced
+});
+
+test("renderModelComparison: scales the real spend when no tokens are recorded", () => {
+  // The real-world case: spend exists but token totals predate token tracking.
+  // 0.16 € on Haiku → Sonnet 0.48 (+0.32, 3×), Opus 0.80 (+0.64, 5×).
+  const text = renderModelComparison(
+    0.16,
+    0,
+    0,
+    "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+  );
+  assert.match(text, /Claude Haiku 4\.x.*0\.16 یورو \(الان ✅\)/);
+  assert.match(text, /0\.48 یورو \(\+0\.32/); // sonnet, 3×
+  assert.match(text, /0\.80 یورو \(\+0\.64/); // opus, 5×
+  assert.match(text, /بر پایه‌ی خرجِ واقعیِ این ماه \(0\.16 یورو\)/);
+});
+
+test("renderModelComparison: no current mark when the model is unknown", () => {
+  const text = renderModelComparison(1, 1000, 1000, "some-other-model");
+  assert.doesNotMatch(text, /الان ✅/);
+  assert.doesNotMatch(text, /نسبت به الان/); // no deltas without a current baseline
 });
 
 test("approvalKeyboard: encodes the target chat id in callback_data", () => {

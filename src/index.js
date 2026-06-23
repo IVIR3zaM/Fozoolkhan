@@ -21,6 +21,7 @@ import {
   recordThreadMessage,
   getThreadMessage,
   getMonthlySpend,
+  getMonthlyUsage,
   addMonthlySpend,
   getProfile,
   appendObservation,
@@ -41,6 +42,7 @@ import {
 } from "./names.js";
 import { generateReply, summarizeObservations } from "./bedrock.js";
 import { sendMessage, answerCallbackQuery, setMyCommands } from "./telegram.js";
+import { MODEL_CATALOG, catalogEntryFor, projectCost } from "./pricing.js";
 
 // How many observations accumulate before the occasional summarization step
 // folds them into a person's profile summary. Frugal: summarization is itself a
@@ -68,11 +70,12 @@ const maybeSummarize = async (userId, monthlyBudget) => {
   if ((await getMonthlySpend()) >= monthlyBudget) return;
 
   const profile = await getProfile(userId);
-  const { summary, costEur } = await summarizeObservations({
-    summary: profile?.summary,
-    observations,
-  });
-  await addMonthlySpend(costEur);
+  const { summary, costEur, inputTokens, outputTokens } =
+    await summarizeObservations({
+      summary: profile?.summary,
+      observations,
+    });
+  await addMonthlySpend(costEur, inputTokens, outputTokens);
   await setProfileSummary(userId, summary);
 };
 
@@ -450,15 +453,93 @@ export const monthlyResetDate = () => {
 };
 
 /**
+ * Render the model price/cost comparison table for the admin `/usage` view: every
+ * model the bot can run, its list price, and what *this month's usage* would have
+ * cost on it — so the admin can see how much more (or less) switching would cost
+ * before changing BEDROCK_MODEL_ID. The current model is marked; each other row
+ * shows the delta against it. Pure formatting over the price catalog — no Bedrock.
+ *
+ * Each model's projected cost is computed one of two ways, in order:
+ *   1. From the month's raw token totals (exact for any price structure) — used
+ *      once any tokens have been recorded.
+ *   2. By scaling the actual euro spend by the model's price ratio — used for a
+ *      month that has spend but no token totals yet (e.g. spend recorded before
+ *      token tracking existed). This is exact as long as the catalog keeps input
+ *      and output prices proportional across models (they are: 1×/3×/5×), so a
+ *      month's whole bill scales by the same factor regardless of the in/out mix.
+ * Without either signal (or an unknown current model) it just lists the prices.
+ *
+ * @param {number} spendEur  Euros actually spent this month.
+ * @param {number} inputTokens  Input tokens recorded this month.
+ * @param {number} outputTokens  Output tokens recorded this month.
+ * @param {string} [currentModelId]  The configured model id (to mark "current").
+ * @returns {string}
+ */
+export const renderModelComparison = (
+  spendEur = 0,
+  inputTokens = 0,
+  outputTokens = 0,
+  currentModelId = process.env.BEDROCK_MODEL_ID,
+) => {
+  const current = catalogEntryFor(currentModelId);
+  const haveTokens =
+    (Number(inputTokens) || 0) > 0 || (Number(outputTokens) || 0) > 0;
+
+  const costOf = (entry) => {
+    if (haveTokens) return projectCost(entry, inputTokens, outputTokens);
+    // No token totals yet — scale the real spend by this model's price ratio.
+    if (current && spendEur > 0) {
+      return spendEur * (entry.usdInPerM / current.usdInPerM);
+    }
+    return 0;
+  };
+
+  const currentCost = current ? costOf(current) : null;
+
+  const rows = MODEL_CATALOG.map((m) => {
+    const cost = costOf(m);
+    const isCurrent = current && m.key === current.key;
+    let suffix = "";
+    if (isCurrent) {
+      suffix = " (الان ✅)";
+    } else if (currentCost != null) {
+      const d = cost - currentCost;
+      const sign = d > 0 ? "+" : d < 0 ? "−" : "±";
+      suffix = ` (${sign}${Math.abs(d).toFixed(2)} نسبت به الان)`;
+    }
+    return `• ${m.label} — $${m.usdInPerM}/$${m.usdOutPerM} هر میلیون توکن → ${cost.toFixed(2)} یورو${suffix}`;
+  });
+
+  const basis = haveTokens
+    ? `توکنِ این ماه: ورودی=${Math.round(inputTokens)} خروجی=${Math.round(outputTokens)}`
+    : `بر پایه‌ی خرجِ واقعیِ این ماه (${spendEur.toFixed(2)} یورو)`;
+
+  return [
+    "مدل‌های در دسترس و هزینه‌شون (تخمینِ خرجِ همین ماه اگه با همین مصرف روی اون مدل بودی):",
+    ...rows,
+    `(قیمت‌ها ورودی/خروجی به دلار در هر میلیون توکن‌ان. ${basis})`,
+  ].join("\n");
+};
+
+/**
  * Render the admin credit-usage summary for the current month: spent so far, the
- * ceiling, what's left, and when it resets. Pure formatting over the code-owned
- * spend counter — no Bedrock.
+ * ceiling, what's left, when it resets, and a per-model cost comparison so the
+ * admin can see what switching models would cost. Pure formatting over the
+ * code-owned spend counter and price catalog — no Bedrock.
  *
  * @param {number} spent  Euros spent this month.
  * @param {number} budget  The monthly ceiling in euros.
+ * @param {{inputTokens?: number, outputTokens?: number}} [usage]  Month's token
+ *   totals, used for the per-model cost comparison.
+ * @param {string} [currentModelId]  The configured model id (to mark "current").
  * @returns {string}
  */
-export const renderUsage = (spent, budget) => {
+export const renderUsage = (
+  spent,
+  budget,
+  usage = {},
+  currentModelId = process.env.BEDROCK_MODEL_ID,
+) => {
   const remaining = Math.max(0, budget - spent);
   const overBudget = spent >= budget;
   return [
@@ -468,6 +549,13 @@ export const renderUsage = (spent, budget) => {
     `• باقی‌مونده: ${remaining.toFixed(2)} یورو`,
     `• ریست: ${monthlyResetDate()} (اول ماه بعد)`,
     overBudget ? "\nاین ماه ته کشید 😅 تا ریست مهمونِ سکوتم‌این." : "",
+    "",
+    renderModelComparison(
+      spent,
+      usage.inputTokens ?? 0,
+      usage.outputTokens ?? 0,
+      currentModelId,
+    ),
   ]
     .filter(Boolean)
     .join("\n");
@@ -523,10 +611,10 @@ const handleAdminCommand = async (message) => {
   }
   if (parsed.cmd === "usage" || parsed.cmd === "credit") {
     const budget = Number(process.env.MONTHLY_BUDGET_EUR ?? 5);
-    const spent = await getMonthlySpend();
+    const usage = await getMonthlyUsage();
     await sendMessage(
       message.chat.id,
-      renderUsage(spent, budget),
+      renderUsage(usage.spendEur, budget, usage, process.env.BEDROCK_MODEL_ID),
       message.message_id,
     );
     return true;
@@ -802,7 +890,8 @@ const runDebug = async ({
     nameNote,
     unresolvedNames,
   });
-  await addMonthlySpend(reply.costEur); // honest accounting: the call happened.
+  // honest accounting: the call happened.
+  await addMonthlySpend(reply.costEur, reply.inputTokens, reply.outputTokens);
 
   // Show what each coreference alias would ground to — but DON'T persist it.
   const participants = buildParticipantIndex(
@@ -860,7 +949,8 @@ const runDebug = async ({
       summary: speaker?.summary,
       observations: summaryInput,
     });
-    await addMonthlySpend(sum.costEur); // the call happened — count it.
+    // the call happened — count it.
+    await addMonthlySpend(sum.costEur, sum.inputTokens, sum.outputTokens);
     sections.push(
       [
         "== فراخوانِ خلاصه (SUMMARY — dry-run، ذخیره نشد) ==",
@@ -1110,17 +1200,18 @@ export const handler = async (event) => {
   // it back, threaded under the triggering message. Errors are swallowed so
   // Telegram does not retry.
   try {
-    const { text, observations, aliases, costEur } = await generateReply({
-      recentMessages,
-      replyChain,
-      profileSnippet,
-      subjectSnippets,
-      nameNote,
-      unresolvedNames,
-    });
-    // Increment the monthly spend counter after every successful call (the
-    // estimated euro cost from the call's token usage).
-    await addMonthlySpend(costEur);
+    const { text, observations, aliases, costEur, inputTokens, outputTokens } =
+      await generateReply({
+        recentMessages,
+        replyChain,
+        profileSnippet,
+        subjectSnippets,
+        nameNote,
+        unresolvedNames,
+      });
+    // Increment the monthly spend counter and token totals after every successful
+    // call (the estimated euro cost, plus the raw tokens for the /usage compare).
+    await addMonthlySpend(costEur, inputTokens, outputTokens);
     if (text) {
       const sent = await sendMessage(message.chat.id, text, message.message_id);
       // Record our own reply into the rolling buffer so next turn the bot sees

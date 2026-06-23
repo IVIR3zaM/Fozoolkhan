@@ -77,14 +77,25 @@ variable "max_response_tokens" {
   default     = 300
 }
 
+variable "usd_to_eur" {
+  description = <<-EOT
+    USD->EUR factor applied to the model price catalog (src/pricing.js) when
+    estimating spend and rendering the /usage comparison. ~0.92 means 1 USD ~=
+    0.92 EUR. The catalog prices each model by BEDROCK_MODEL_ID, so changing the
+    model re-prices spend automatically -- no need to touch the per-1K vars below.
+  EOT
+  type        = number
+  default     = 0.92
+}
+
 variable "bedrock_input_price_per_1k_eur" {
-  description = "Per-1K input-token price (EUR) used to estimate spend. Claude Haiku 4.5 ~ $1.00/M."
+  description = "Fallback per-1K input-token price (EUR), used ONLY for a model the price catalog doesn't recognize. Default matches Claude Haiku 4.5 ($1.00/M)."
   type        = number
   default     = 0.00092
 }
 
 variable "bedrock_output_price_per_1k_eur" {
-  description = "Per-1K output-token price (EUR) used to estimate spend. Claude Haiku 4.5 ~ $5.00/M."
+  description = "Fallback per-1K output-token price (EUR), used ONLY for a model the price catalog doesn't recognize. Default matches Claude Haiku 4.5 ($5.00/M)."
   type        = number
   default     = 0.0046
 }

@@ -18,6 +18,7 @@ import {
   BedrockRuntimeClient,
   InvokeModelCommand,
 } from "@aws-sdk/client-bedrock-runtime";
+import { priceForModel } from "./pricing.js";
 
 // One shared client per Lambda container. Region is provided by Lambda.
 const client = new BedrockRuntimeClient({});
@@ -25,14 +26,6 @@ const client = new BedrockRuntimeClient({});
 const modelId = () =>
   process.env.BEDROCK_MODEL_ID ?? "anthropic.claude-3-5-haiku-20241022-v1:0";
 const maxTokens = () => Number(process.env.MAX_RESPONSE_TOKENS ?? 300);
-
-// Per-1K-token prices in euros, used only to estimate spend for the monthly
-// counter (the spend guard's brake). Defaults match Claude 3.5 Haiku on
-// Bedrock; override via env if the model or FX rate changes.
-const inputPricePer1K = () =>
-  Number(process.env.BEDROCK_INPUT_PRICE_PER_1K_EUR ?? 0.0008);
-const outputPricePer1K = () =>
-  Number(process.env.BEDROCK_OUTPUT_PRICE_PER_1K_EUR ?? 0.004);
 
 // The character. Persian voice on purpose: the bot must be funny *in Persian*.
 // The humor boundary (AGENTS.md) is baked in as a trait of a clever friend in a
@@ -149,9 +142,12 @@ export const parseObservationBlock = (block) => {
   return out;
 };
 
-// Pull the concatenated text and an estimated euro cost out of a Bedrock Claude
-// response payload. Shared by every call so cost accounting stays uniform (the
-// estimate feeds the spend guard's monthly counter).
+// Pull the concatenated text, the token counts, and an estimated euro cost out of
+// a Bedrock Claude response payload. Shared by every call so cost accounting stays
+// uniform. The price is resolved from the configured model id (see pricing.js), so
+// switching BEDROCK_MODEL_ID re-prices the counter automatically. The raw token
+// counts are returned too, so they can be accumulated per month and re-priced
+// against other models in the admin `/usage` comparison.
 const parseCompletion = (payload) => {
   const text = (payload.content ?? [])
     .filter((block) => block.type === "text")
@@ -161,11 +157,11 @@ const parseCompletion = (payload) => {
 
   const inputTokens = payload.usage?.input_tokens ?? 0;
   const outputTokens = payload.usage?.output_tokens ?? 0;
+  const { inPer1k, outPer1k } = priceForModel(modelId());
   const costEur =
-    (inputTokens / 1000) * inputPricePer1K() +
-    (outputTokens / 1000) * outputPricePer1K();
+    (inputTokens / 1000) * inPer1k + (outputTokens / 1000) * outPer1k;
 
-  return { text, costEur };
+  return { text, costEur, inputTokens, outputTokens };
 };
 
 // Render one transcript line, marking the bot's own past messages distinctly so
@@ -304,7 +300,12 @@ export const generateReply = async (context = {}) => {
 
   const response = await client.send(command);
   const payload = JSON.parse(Buffer.from(response.body).toString("utf8"));
-  const { text: raw, costEur } = parseCompletion(payload);
+  const {
+    text: raw,
+    costEur,
+    inputTokens,
+    outputTokens,
+  } = parseCompletion(payload);
 
   // Split the user-facing reply from the piggybacked control blocks. If the model
   // omitted a delimiter that block is empty — so a missing observation or alias
@@ -318,6 +319,8 @@ export const generateReply = async (context = {}) => {
     observations,
     aliases,
     costEur,
+    inputTokens,
+    outputTokens,
     systemPrompt: SYSTEM_PROMPT,
     userPrompt,
     raw,
@@ -364,10 +367,12 @@ export const summarizeObservations = async ({ summary, observations } = {}) => {
 
   const response = await client.send(command);
   const payload = JSON.parse(Buffer.from(response.body).toString("utf8"));
-  const { text, costEur } = parseCompletion(payload);
+  const { text, costEur, inputTokens, outputTokens } = parseCompletion(payload);
   return {
     summary: text,
     costEur,
+    inputTokens,
+    outputTokens,
     systemPrompt: SUMMARY_SYSTEM_PROMPT,
     userPrompt,
   };
