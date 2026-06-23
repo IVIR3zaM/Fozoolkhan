@@ -67,7 +67,7 @@ export const normalizeName = (raw) => {
   let s = String(raw).trim().toLowerCase();
   s = s.replace(/^@+/, "");
   s = s.replace(/[يى]/g, "ی").replace(/ك/g, "ک"); // Arabic -> Persian.
-  s = s.replace(/[«»"'`،؛؟.!?,:()\[\]{}…]/g, "");
+  s = s.replace(/[«»"'`،؛؟.!?,:()[\]{}…]/g, "");
   return s.trim();
 };
 
@@ -102,7 +102,8 @@ const obsTtlDays = () => Number(process.env.OBS_TTL_DAYS ?? 30);
 
 // How many recent messages to keep (and later send as context). Never full
 // history — token frugality is a hard rule (see AGENTS.md).
-const contextMessageCount = () => Number(process.env.CONTEXT_MESSAGE_COUNT ?? 5);
+const contextMessageCount = () =>
+  Number(process.env.CONTEXT_MESSAGE_COUNT ?? 5);
 
 // The display name we show for a person in context, derived in code from the
 // Telegram `from` object (a label only — identity is the numeric id elsewhere).
@@ -117,7 +118,7 @@ const displayNameOf = (from) =>
  */
 export const getProfile = async (userId) => {
   const { Item } = await docClient.send(
-    new GetCommand({ TableName: tableName(), Key: profileKey(userId) })
+    new GetCommand({ TableName: tableName(), Key: profileKey(userId) }),
   );
   return Item ?? null;
 };
@@ -173,7 +174,7 @@ export const recordSighting = async (from) => {
  */
 const appendRecent = async (chatId, entry) => {
   const { Item } = await docClient.send(
-    new GetCommand({ TableName: tableName(), Key: recentKey(chatId) })
+    new GetCommand({ TableName: tableName(), Key: recentKey(chatId) }),
   );
 
   const messages = Item?.messages ?? [];
@@ -184,7 +185,7 @@ const appendRecent = async (chatId, entry) => {
     new PutCommand({
       TableName: tableName(),
       Item: { ...recentKey(chatId), messages: recent },
-    })
+    }),
   );
 
   return recent;
@@ -237,7 +238,7 @@ export const recordBotMessage = async (chatId, text) => {
 export const getChatAccess = async (chatId) => {
   if (!chatId) return null;
   const { Item } = await docClient.send(
-    new GetCommand({ TableName: tableName(), Key: chatAccessKey(chatId) })
+    new GetCommand({ TableName: tableName(), Key: chatAccessKey(chatId) }),
   );
   return Item ?? null;
 };
@@ -268,7 +269,7 @@ export const setChatAccess = async (chatId, status, title) => {
       UpdateExpression: expr,
       ExpressionAttributeNames: names,
       ExpressionAttributeValues: values,
-    })
+    }),
   );
 };
 
@@ -291,7 +292,7 @@ export const listChatAccess = async () => {
         FilterExpression: "SK = :access",
         ExpressionAttributeValues: { ":access": "ACCESS" },
         ExclusiveStartKey: startKey,
-      })
+      }),
     );
     for (const i of Items ?? []) {
       items.push({
@@ -305,7 +306,9 @@ export const listChatAccess = async () => {
   } while (startKey);
 
   // Most recently touched first, so the admin sees fresh activity at the top.
-  items.sort((a, b) => String(b.last_updated ?? "").localeCompare(a.last_updated ?? ""));
+  items.sort((a, b) =>
+    String(b.last_updated ?? "").localeCompare(a.last_updated ?? ""),
+  );
   return items;
 };
 
@@ -319,7 +322,7 @@ export const listChatAccess = async () => {
  */
 export const getMonthlySpend = async (month = currentMonth()) => {
   const { Item } = await docClient.send(
-    new GetCommand({ TableName: tableName(), Key: budgetKey(month) })
+    new GetCommand({ TableName: tableName(), Key: budgetKey(month) }),
   );
   return Number(Item?.spend_eur ?? 0);
 };
@@ -340,7 +343,7 @@ export const addMonthlySpend = async (amountEur, month = currentMonth()) => {
       Key: budgetKey(month),
       UpdateExpression: "ADD spend_eur :amt",
       ExpressionAttributeValues: { ":amt": amountEur },
-    })
+    }),
   );
 };
 
@@ -362,7 +365,7 @@ export const bumpNameWeight = async (name, userId, amount = 1) => {
       Key: nameKey(name, userId),
       UpdateExpression: "ADD weight :n SET user_id = :u",
       ExpressionAttributeValues: { ":n": amount, ":u": userId },
-    })
+    }),
   );
 };
 
@@ -383,7 +386,7 @@ export const bumpEdge = async (askerId, userId, amount = 1) => {
       UpdateExpression: "ADD #c :n",
       ExpressionAttributeNames: { "#c": "count" },
       ExpressionAttributeValues: { ":n": amount },
-    })
+    }),
   );
 };
 
@@ -401,7 +404,7 @@ export const getNameCandidates = async (name) => {
       TableName: tableName(),
       KeyConditionExpression: "PK = :pk",
       ExpressionAttributeValues: { ":pk": `NAME#${key}` },
-    })
+    }),
   );
   return (Items ?? []).map((i) => ({
     userId: i.user_id,
@@ -427,7 +430,7 @@ export const recordUsername = async (username, userId) => {
       Key: usernameKey(username),
       UpdateExpression: "SET user_id = :u",
       ExpressionAttributeValues: { ":u": userId },
-    })
+    }),
   );
 };
 
@@ -442,7 +445,7 @@ export const resolveUsername = async (username) => {
   const key = normalizeName(username);
   if (!key) return null;
   const { Item } = await docClient.send(
-    new GetCommand({ TableName: tableName(), Key: usernameKey(username) })
+    new GetCommand({ TableName: tableName(), Key: usernameKey(username) }),
   );
   return Item?.user_id ?? null;
 };
@@ -457,7 +460,7 @@ export const resolveUsername = async (username) => {
 export const getEdgeCount = async (askerId, userId) => {
   if (!askerId || !userId) return 0;
   const { Item } = await docClient.send(
-    new GetCommand({ TableName: tableName(), Key: edgeKey(askerId, userId) })
+    new GetCommand({ TableName: tableName(), Key: edgeKey(askerId, userId) }),
   );
   return Number(Item?.count ?? 0);
 };
@@ -480,7 +483,7 @@ export const appendObservation = async (userId, line) => {
     new PutCommand({
       TableName: tableName(),
       Item: { ...obsKey(userId, new Date().toISOString()), obs, ttl },
-    })
+    }),
   );
 };
 
@@ -500,7 +503,7 @@ export const getObservations = async (userId) => {
       KeyConditionExpression: "PK = :pk AND begins_with(SK, :obs)",
       ExpressionAttributeValues: { ":pk": `USER#${userId}`, ":obs": "OBS#" },
       Limit: 50,
-    })
+    }),
   );
   return (Items ?? []).map((i) => i.obs).filter(Boolean);
 };
@@ -525,6 +528,6 @@ export const setProfileSummary = async (userId, summary) => {
       ConditionExpression: "attribute_exists(PK)",
       ExpressionAttributeNames: { "#s": "summary" },
       ExpressionAttributeValues: { ":s": text, ":t": new Date().toISOString() },
-    })
+    }),
   );
 };

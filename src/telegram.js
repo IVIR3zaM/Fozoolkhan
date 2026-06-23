@@ -19,7 +19,7 @@ export const sendMessage = async (
   chatId,
   text,
   replyToMessageId,
-  replyMarkup
+  replyMarkup,
 ) => {
   const body = { chat_id: chatId, text };
   if (replyToMessageId) body.reply_to_message_id = replyToMessageId;
@@ -33,7 +33,9 @@ export const sendMessage = async (
 
   if (!response.ok) {
     const detail = await response.text();
-    throw new Error(`Telegram sendMessage failed: ${response.status} ${detail}`);
+    throw new Error(
+      `Telegram sendMessage failed: ${response.status} ${detail}`,
+    );
   }
 };
 
@@ -58,7 +60,9 @@ export const setMyCommands = async (commands, scope) => {
 
   if (!response.ok) {
     const detail = await response.text();
-    throw new Error(`Telegram setMyCommands failed: ${response.status} ${detail}`);
+    throw new Error(
+      `Telegram setMyCommands failed: ${response.status} ${detail}`,
+    );
   }
 };
 
@@ -83,7 +87,7 @@ export const answerCallbackQuery = async (callbackQueryId, text) => {
   if (!response.ok) {
     const detail = await response.text();
     throw new Error(
-      `Telegram answerCallbackQuery failed: ${response.status} ${detail}`
+      `Telegram answerCallbackQuery failed: ${response.status} ${detail}`,
     );
   }
 };

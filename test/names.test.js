@@ -27,7 +27,7 @@ test("extractNameCandidates: deduplicates and skips one-char tokens", () => {
   assert.deepEqual(
     got.filter((g) => g === "علی").length,
     1,
-    "duplicate names collapse"
+    "duplicate names collapse",
   );
   assert.ok(!got.includes("ب")); // single char dropped
 });

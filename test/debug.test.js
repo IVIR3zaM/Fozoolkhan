@@ -47,7 +47,10 @@ test("wantsDebug: safe on a malformed message", () => {
 });
 
 test("debugLine: marks the bot's own lines distinctly", () => {
-  assert.equal(debugLine({ self: true, text: "گفتم" }), "فضول‌خان (خود بات): گفتم");
+  assert.equal(
+    debugLine({ self: true, text: "گفتم" }),
+    "فضول‌خان (خود بات): گفتم",
+  );
   assert.equal(debugLine({ name: "علی", text: "سلام" }), "علی: سلام");
   assert.equal(debugLine({ text: "ناشناس" }), "یه نفر: ناشناس");
 });

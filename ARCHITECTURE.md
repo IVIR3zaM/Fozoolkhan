@@ -2,12 +2,12 @@
 
 ## Stack (all inside AWS)
 
-| Concern | Choice | Why |
-|---|---|---|
-| LLM | **Amazon Bedrock**, Claude Haiku | Cheapest model with acceptable Persian humor. Model ID is a single config constant (`BEDROCK_MODEL_ID`) so it can be swapped. |
-| Compute | **AWS Lambda** + **Function URL** | Function URL, *not* API Gateway — saves cost. |
-| State | **DynamoDB**, on-demand | No capacity to provision; pay per request. |
-| Storage | none | No S3 needed. |
+| Concern | Choice                            | Why                                                                                                                           |
+| ------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| LLM     | **Amazon Bedrock**, Claude Haiku  | Cheapest model with acceptable Persian humor. Model ID is a single config constant (`BEDROCK_MODEL_ID`) so it can be swapped. |
+| Compute | **AWS Lambda** + **Function URL** | Function URL, _not_ API Gateway — saves cost.                                                                                 |
+| State   | **DynamoDB**, on-demand           | No capacity to provision; pay per request.                                                                                    |
+| Storage | none                              | No S3 needed.                                                                                                                 |
 
 ## Core principle: code owns structure, the LLM owns prose
 
@@ -17,7 +17,7 @@ labels that point at an id.
 
 **Separation of responsibilities:**
 
-- **Code** owns all *structure*: identity, the name→person mapping, probability
+- **Code** owns all _structure_: identity, the name→person mapping, probability
   weights, who-talks-to-whom edges, counters, the spend counter. The LLM never
   edits these.
 - **The LLM** touches exactly **one** free-text field: a person's short
@@ -28,15 +28,15 @@ labels that point at an id.
 
 ## DynamoDB single-table design
 
-| PK | SK | Item contents |
-|---|---|---|
-| `USER#<uid>` | `PROFILE` | display names seen, usernames seen, short personality summary, joke styles that land, `last_updated` |
-| `USER#<uid>` | `OBS#<timestamp>` | append-only raw observation (one line). Has a **TTL** so old ones auto-expire. |
-| `NAME#<name>` | `USER#<uid>` | `weight` that this spoken name refers to this person |
-| `USERNAME#<username>` | `OWNER` | numeric `user_id` that currently owns this @username (1:1; lets a bare `@username` mention become an edge) |
-| `EDGE#<uid_a>` | `USER#<uid_b>` | `count` of how often A talks with/about B |
-| `BUDGET` | `MONTH#<YYYY-MM>` | running monthly spend estimate (see cost control) |
-| `CHAT#<chatId>` | `ACCESS` | allowlist `status` (pending/approved/denied/removed) + group title (see access control) |
+| PK                    | SK                | Item contents                                                                                              |
+| --------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------- |
+| `USER#<uid>`          | `PROFILE`         | display names seen, usernames seen, short personality summary, joke styles that land, `last_updated`       |
+| `USER#<uid>`          | `OBS#<timestamp>` | append-only raw observation (one line). Has a **TTL** so old ones auto-expire.                             |
+| `NAME#<name>`         | `USER#<uid>`      | `weight` that this spoken name refers to this person                                                       |
+| `USERNAME#<username>` | `OWNER`           | numeric `user_id` that currently owns this @username (1:1; lets a bare `@username` mention become an edge) |
+| `EDGE#<uid_a>`        | `USER#<uid_b>`    | `count` of how often A talks with/about B                                                                  |
+| `BUDGET`              | `MONTH#<YYYY-MM>` | running monthly spend estimate (see cost control)                                                          |
+| `CHAT#<chatId>`       | `ACCESS`          | allowlist `status` (pending/approved/denied/removed) + group title (see access control)                    |
 
 All writes to structured items (`NAME#`, `EDGE#`, `BUDGET`, profile structure)
 are done by code. The LLM's output only ever lands in `OBS#` lines and, via the
@@ -91,7 +91,7 @@ Lambda (Function URL)
 
 1. **AWS Budgets alert** — manual setup step. Alerts at 50/80/100% of the €5
    ceiling. This is a notification, not a brake.
-2. **In-code spend guard** — the real brake. Before *every* Bedrock call, read
+2. **In-code spend guard** — the real brake. Before _every_ Bedrock call, read
    the `BUDGET / MONTH#<YYYY-MM>` counter. If it is over `MONTHLY_BUDGET_EUR`,
    the bot does **not** call Bedrock; it replies with a pre-written funny
    Persian line. After each successful call, the counter is incremented by the
@@ -99,6 +99,7 @@ Lambda (Function URL)
    counter is keyed by month, so it naturally resets at month rollover.
 
 **Token frugality everywhere:**
+
 - Cap `max_tokens` on every response (`MAX_RESPONSE_TOKENS`).
 - Send only the last 4–5 messages plus the relevant profile snippet.
 - Keep profiles short; observations are one line each and TTL-expire.

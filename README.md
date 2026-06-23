@@ -18,6 +18,7 @@ person over time so its jokes land better.
 ## When it talks
 
 Only when:
+
 - it is **mentioned** (`@fozoolkhan`), or
 - someone **replies** to one of its messages.
 

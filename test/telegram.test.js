@@ -47,7 +47,7 @@ test("sendMessage: throws with status detail on a non-2xx response", async () =>
   nextResponse = { ok: false, status: 403, text: async () => "forbidden" };
   await assert.rejects(
     () => sendMessage(7, "hi"),
-    /sendMessage failed: 403 forbidden/
+    /sendMessage failed: 403 forbidden/,
   );
 });
 

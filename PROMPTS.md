@@ -25,8 +25,8 @@ Two kinds of call go to Bedrock. Both send a constant `system` string plus one
    - `profileSnippet` — `names_seen[0] — summary` of whoever the bot is addressing
      (the speaker, or a confidently-resolved subject of their question).
    - `nameNote` — a code-written hint, e.g. an ambiguity note ("which Ali?").
-   The turn always ends with the reply instruction and the `###OBS###` memory
-   instruction.
+     The turn always ends with the reply instruction and the `###OBS###` memory
+     instruction.
 
 2. **Summarize** — `summarizeObservations()`, a separate, occasional call that
    folds a person's accumulated one-line observations into their profile summary.
@@ -66,22 +66,27 @@ scenarios show only the `user` turn.
 ambiguity. رضا already has a profile summary from earlier turns.
 
 **Raw Telegram update (trimmed):**
+
 ```json
-{ "message": {
-  "chat": { "id": -100123, "type": "supergroup" },
-  "from": { "id": 111, "first_name": "رضا", "username": "reza_m" },
-  "text": "@fozoolkhan_bot نظرت چیه راجبش؟",
-  "entities": [{ "type": "mention", "offset": 0, "length": 15 }]
-}}
+{
+  "message": {
+    "chat": { "id": -100123, "type": "supergroup" },
+    "from": { "id": 111, "first_name": "رضا", "username": "reza_m" },
+    "text": "@fozoolkhan_bot نظرت چیه راجبش؟",
+    "entities": [{ "type": "mention", "offset": 0, "length": 15 }]
+  }
+}
 ```
 
 **Stored state used:**
+
 - `CHAT#-100123 / RECENT` buffer (after appending this message):
   `[{name:"علی", text:"بچه‌ها فردا میاید کوه؟"}, {name:"رضا", text:"@fozoolkhan_bot نظرت چیه راجبش؟"}]`
 - `USER#111 / PROFILE`: `names_seen:["رضا"]`, `summary:"رفیقِ شوخ که عاشقِ کوه و طبیعته و همیشه دیر میاد."`
   → `profileSnippet = "رضا — رفیقِ شوخ که عاشقِ کوه و طبیعته و همیشه دیر میاد."`
 
 **Final `user` turn:**
+
 ```
 گفتگوی اخیر گروه (قدیمی‌ترین بالا، آخرین خط همون پیامیه که الان باید جوابش بدی):
 علی: بچه‌ها فردا میاید کوه؟
@@ -94,11 +99,13 @@ ambiguity. رضا already has a profile summary from earlier turns.
 ```
 
 **Illustrative model output:**
+
 ```
 کوه؟ رضا تو که خودت ساعتِ راه‌افتادن رو هم دیر میای، تا برسی بالا بقیه دارن برمی‌گردن 😂
 ###OBS###
 رضا: روی دیر اومدنش راحت شوخی رو می‌پذیره
 ```
+
 Code sends the line above `###OBS###` as the reply, then appends `روی دیر اومدنش…`
 to `USER#111`'s `OBS#` log.
 
@@ -114,25 +121,30 @@ replied-to message is in the turn, and the bot can also store a note about a
 talks about حسن (a third person the bot has seen before, `user_id 333`).
 
 **Raw Telegram update (trimmed):**
+
 ```json
-{ "message": {
-  "chat": { "id": -100123, "type": "supergroup" },
-  "from": { "id": 111, "first_name": "رضا" },
-  "text": "@fozoolkhan_bot اینو دیدی؟",
-  "entities": [{ "type": "mention", "offset": 0, "length": 15 }],
-  "reply_to_message": {
-    "from": { "id": 222, "first_name": "علی" },
-    "text": "حسن گفته فردا میاد حسابِ فضول‌خان رو می‌رسه 😂"
+{
+  "message": {
+    "chat": { "id": -100123, "type": "supergroup" },
+    "from": { "id": 111, "first_name": "رضا" },
+    "text": "@fozoolkhan_bot اینو دیدی؟",
+    "entities": [{ "type": "mention", "offset": 0, "length": 15 }],
+    "reply_to_message": {
+      "from": { "id": 222, "first_name": "علی" },
+      "text": "حسن گفته فردا میاد حسابِ فضول‌خان رو می‌رسه 😂"
+    }
   }
-}}
+}
 ```
 
 **Stored state used:**
+
 - `RECENT` buffer (oldest→newest, trigger last).
 - `replyTo = {name:"علی", text:"حسن گفته فردا میاد حسابِ فضول‌خان رو می‌رسه 😂", self:false}`.
 - `profileSnippet` for رضا (the speaker) if any.
 
 **Final `user` turn:**
+
 ```
 گفتگوی اخیر گروه (قدیمی‌ترین بالا، آخرین خط همون پیامیه که الان باید جوابش بدی):
 علی: حسن گفته فردا میاد حسابِ فضول‌خان رو می‌رسه 😂
@@ -146,11 +158,13 @@ talks about حسن (a third person the bot has seen before, `user_id 333`).
 ```
 
 **Illustrative model output:**
+
 ```
 بگو حسن بیاد، فقط دمپایی‌هاشو محکم ببنده که دفعه‌ی قبل وسطِ دعوا لنگه‌اش در رفت 😂
 ###OBS###
 حسن: بقیه به‌شوخی ازش به‌عنوانِ آدمِ دعوایی/تهدیدکننده یاد می‌کنن
 ```
+
 `resolveObservationTarget` maps `حسن → user_id 333` and appends the note to
 **حسن's** `OBS#` log — built from علی's words, not حسن's own. The note about حسن
 is stored even though حسن didn't speak this turn.
@@ -167,6 +181,7 @@ triggers it).
 `replyTo` is the bot's own message (`self:true`).
 
 **Final `user` turn:**
+
 ```
 گفتگوی اخیر گروه (قدیمی‌ترین بالا، آخرین خط همون پیامیه که الان باید جوابش بدی):
 رضا: فضول‌خان نظرت راجبِ تیمِ ملی چیه؟
@@ -193,6 +208,7 @@ and the edge-biased scores don't clearly favour one. `resolveName` returns
 swapped in (we're not confident who is meant).
 
 **Final `user` turn:**
+
 ```
 گفتگوی اخیر گروه (قدیمی‌ترین بالا، آخرین خط همون پیامیه که الان باید جوابش بدی):
 رضا: فضول‌خان علی کجاست؟ پیداش نیست
@@ -217,12 +233,14 @@ threshold. `summarizeObservations()` fires once to fold them into his profile
 summary. This uses a **different** `system` string.
 
 **`system`:**
+
 ```
 تو نکته‌های پراکنده‌ای را که فضول‌خان درباره‌ی یک عضو گروه جمع کرده می‌گیری و در نهایت دو-سه جمله‌ی کوتاه فارسی فشرده می‌کنی: عادت‌ها، علاقه‌ها و نوع شوخی‌هایی که با او می‌گیره. فقط همان خلاصه را بنویس، بدون مقدمه و بدون فهرست.
 ```
 
 **`user` turn** (when حسن already has a summary; the "خلاصه‌ی فعلی" block is omitted
 on the first ever summary):
+
 ```
 خلاصه‌ی فعلی:
 آدمِ دعوایی و پرشر که بقیه سربه‌سرش می‌ذارن.

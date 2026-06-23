@@ -7,11 +7,17 @@
     "node": ">=20"
   },
   "scripts": {
+    "lint": "eslint .",
     "test": "node --test"
   },
   "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.0.0",
     "@aws-sdk/client-dynamodb": "^3.0.0",
-    "@aws-sdk/lib-dynamodb": "^3.0.0",
-    "@aws-sdk/client-bedrock-runtime": "^3.0.0"
+    "@aws-sdk/lib-dynamodb": "^3.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "eslint": "^9.39.4",
+    "globals": "^17.7.0"
   }
 }

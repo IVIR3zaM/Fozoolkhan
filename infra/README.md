@@ -21,7 +21,7 @@ The €5/month in-code spend guard still caps cost regardless of model.
 
 1. **Create the bot** with [@BotFather](https://t.me/BotFather); save the token.
    Run `/setprivacy` → **Disable**, so the bot sees group mentions/replies.
-2. **Enable Bedrock model access** for *Claude Haiku 4.5* in eu-central-1:
+2. **Enable Bedrock model access** for _Claude Haiku 4.5_ in eu-central-1:
    Bedrock console → Model access → enable Anthropic Claude Haiku 4.5.
    (Verify: the deploy step below test-invokes it.)
 

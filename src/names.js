@@ -104,7 +104,7 @@ export const resolveName = async (askerId, text, botUsername) => {
       candidates.map(async (c) => {
         const edge = askerId ? await getEdgeCount(askerId, c.userId) : 0;
         return { userId: c.userId, score: c.weight * (1 + edge) };
-      })
+      }),
     );
     scored.sort((a, b) => b.score - a.score);
 
@@ -149,7 +149,11 @@ export const resolveObservationTarget = async (speaker, name, botUsername) => {
   if (nk === normalizeName("فضول‌خان") || nk === normalizeName("فضول"))
     return null;
 
-  const speakerNames = [speaker?.first_name, speaker?.last_name, speaker?.username]
+  const speakerNames = [
+    speaker?.first_name,
+    speaker?.last_name,
+    speaker?.username,
+  ]
     .map(normalizeName)
     .filter(Boolean);
   if (SELF_REFERENCES.has(nk) || speakerNames.includes(nk)) {
@@ -221,7 +225,8 @@ export const learnFromMessage = async (message) => {
     if (e.type === "text_mention" && e.user?.id && !e.user.is_bot) {
       const label = text.substr(e.offset, e.length);
       tasks.push(bumpNameWeight(label, e.user.id));
-      if (e.user.username) tasks.push(recordUsername(e.user.username, e.user.id));
+      if (e.user.username)
+        tasks.push(recordUsername(e.user.username, e.user.id));
       if (e.user.id !== from.id) tasks.push(bumpEdge(from.id, e.user.id));
       continue;
     }
@@ -236,7 +241,7 @@ export const learnFromMessage = async (message) => {
           if (targetId && targetId !== from.id) {
             await bumpEdge(from.id, targetId);
           }
-        })()
+        })(),
       );
     }
   }

@@ -36,11 +36,7 @@ import {
   learnFromMessage,
 } from "./names.js";
 import { generateReply, summarizeObservations } from "./bedrock.js";
-import {
-  sendMessage,
-  answerCallbackQuery,
-  setMyCommands,
-} from "./telegram.js";
+import { sendMessage, answerCallbackQuery, setMyCommands } from "./telegram.js";
 
 // How many observations accumulate before the occasional summarization step
 // folds them into a person's profile summary. Frugal: summarization is itself a
@@ -95,7 +91,7 @@ const rememberObservations = async (speaker, observations, monthlyBudget) => {
     const targetId = await resolveObservationTarget(
       speaker,
       name,
-      process.env.BOT_USERNAME
+      process.env.BOT_USERNAME,
     );
     if (targetId) await appendObservation(targetId, note);
   }
@@ -200,7 +196,7 @@ const handleMembershipChange = async (myChatMember) => {
       process.env.ADMIN_USER_ID,
       ASK_APPROVAL(chat.title ?? chat.id),
       undefined,
-      approvalKeyboard(chat.id)
+      approvalKeyboard(chat.id),
     );
   } else if (removed) {
     await setChatAccess(chat.id, "removed", chat.title);
@@ -262,7 +258,10 @@ export const statusLabel = (status) =>
 export const ADMIN_COMMANDS = [
   { command: "groups", description: "گروه‌ها و وضعیت تأییدشون" },
   { command: "usage", description: "وضعیت اعتبار و خرجِ این ماه" },
-  { command: "approve", description: "فعال‌کردن گروه (داخل گروه، یا با chat_id)" },
+  {
+    command: "approve",
+    description: "فعال‌کردن گروه (داخل گروه، یا با chat_id)",
+  },
   { command: "deny", description: "ساکت‌کردن گروه (داخل گروه، یا با chat_id)" },
   { command: "help", description: "راهنمای دستورها" },
 ];
@@ -331,7 +330,7 @@ export const groupsKeyboard = (chats) => ({
 export const renderGroups = (chats) => {
   if (!chats.length) return { text: NO_GROUPS };
   const lines = chats.map(
-    (c) => `• «${c.title ?? c.chatId}» — ${statusLabel(c.status)}`
+    (c) => `• «${c.title ?? c.chatId}» — ${statusLabel(c.status)}`,
   );
   return {
     text: `${GROUPS_HEADER}\n\n${lines.join("\n")}\n\n${GROUPS_FOOTER}`,
@@ -425,7 +424,7 @@ const handleAdminCommand = async (message) => {
     await sendMessage(
       message.chat.id,
       renderUsage(spent, budget),
-      message.message_id
+      message.message_id,
     );
     return true;
   }
@@ -449,7 +448,7 @@ const handleAdminCommand = async (message) => {
   await sendMessage(
     message.chat.id,
     status === "approved" ? CMD_APPROVED : CMD_DENIED,
-    message.message_id
+    message.message_id,
   );
 
   // Approving from a DM by id: greet the target group too.
@@ -551,14 +550,16 @@ export const sendChunked = async (chatId, text, replyToMessageId) => {
     await sendMessage(
       chatId,
       text.slice(i, i + TELEGRAM_CHUNK),
-      i === 0 ? replyToMessageId : undefined
+      i === 0 ? replyToMessageId : undefined,
     );
   }
 };
 
 // Render one recent-buffer line the way the model sees it, for the dump.
 export const debugLine = (m) =>
-  m?.self ? `فضول‌خان (خود بات): ${m.text}` : `${m?.name ?? "یه نفر"}: ${m?.text}`;
+  m?.self
+    ? `فضول‌خان (خود بات): ${m.text}`
+    : `${m?.name ?? "یه نفر"}: ${m?.text}`;
 
 /**
  * Run the admin debug pipeline: generate the reply (real Bedrock call) and a
@@ -601,7 +602,7 @@ const runDebug = async ({
       `nameNote: ${nameNote || "—"}`,
       `profileSnippet (که به مدل می‌ره): ${profileSnippet || "—"}`,
       `خرج این ماه: ${spent.toFixed(4)} از ${Number(
-        process.env.MONTHLY_BUDGET_EUR ?? 5
+        process.env.MONTHLY_BUDGET_EUR ?? 5,
       ).toFixed(2)} یورو`,
       "",
       "گفتگوی اخیر (بافر):",
@@ -611,7 +612,7 @@ const runDebug = async ({
       `OBS فعلیِ گوینده (${existingObs.length}): ${
         existingObs.length ? existingObs.join(" | ") : "—"
       }`,
-    ].join("\n")
+    ].join("\n"),
   );
 
   // 2) The reply call: exact prompts in, raw output out.
@@ -637,13 +638,11 @@ const runDebug = async ({
       `جوابِ تمیزشده: ${reply.text || "—"}`,
       `observations (parse‌شده): ${
         reply.observations.length
-          ? reply.observations
-              .map((o) => `${o.name} → ${o.note}`)
-              .join(" | ")
+          ? reply.observations.map((o) => `${o.name} → ${o.note}`).join(" | ")
           : "—"
       }`,
       `هزینه: ${reply.costEur.toFixed(5)} یورو`,
-    ].join("\n")
+    ].join("\n"),
   );
 
   // 3) The summary call — a DRY RUN for the speaker, mirroring maybeSummarize but
@@ -654,7 +653,7 @@ const runDebug = async ({
     const targetId = await resolveObservationTarget(
       message.from,
       name,
-      process.env.BOT_USERNAME
+      process.env.BOT_USERNAME,
     );
     if (String(targetId) === String(speakerId)) newNotesAboutSpeaker.push(note);
   }
@@ -679,11 +678,11 @@ const runDebug = async ({
         "--- خلاصه‌ی جدید (ذخیره نمی‌شه) ---",
         sum.summary || "—",
         `هزینه: ${sum.costEur.toFixed(5)} یورو`,
-      ].join("\n")
+      ].join("\n"),
     );
   } else {
     sections.push(
-      "== فراخوانِ خلاصه ==\nنکته‌ای برای خلاصه‌کردنِ گوینده نبود؛ این مرحله رد شد."
+      "== فراخوانِ خلاصه ==\nنکته‌ای برای خلاصه‌کردنِ گوینده نبود؛ این مرحله رد شد.",
     );
   }
 
@@ -768,7 +767,7 @@ export const handler = async (event) => {
       recentMessages = await recordMessage(
         message.chat.id,
         message.from,
-        messageText
+        messageText,
       );
     } catch (err) {
       // A storage hiccup must not turn into a Telegram retry storm.
@@ -829,7 +828,7 @@ export const handler = async (event) => {
     resolution = await resolveName(
       message.from?.id,
       messageText,
-      process.env.BOT_USERNAME
+      process.env.BOT_USERNAME,
     );
     if (
       resolution.status === "confident" &&
@@ -871,7 +870,7 @@ export const handler = async (event) => {
         await sendMessage(
           message.chat.id,
           `دیباگ خطا خورد: ${err?.message ?? err}`,
-          message.message_id
+          message.message_id,
         );
       } catch {}
     }
