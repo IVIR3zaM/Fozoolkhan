@@ -124,11 +124,12 @@ test("renderUsage: appends the model comparison table", () => {
   assert.match(text, /Claude Opus 4\.x/);
 });
 
-test("renderModelComparison: token-based projection when tokens are recorded", () => {
+test("renderModelComparison: token fallback only when nothing has been spent", () => {
   process.env.USD_TO_EUR = "0.92"; // pin FX so the numbers are deterministic
-  // 1M input + 200K output: Haiku 1.84, Sonnet 5.52 (+3.68), Opus 9.20 (+7.36).
+  // No spend yet → fall back to tokens. 1M in + 200K out: Haiku 1.84, Sonnet
+  // 5.52 (+3.68), Opus 9.20 (+7.36).
   const text = renderModelComparison(
-    0, // spend ignored once tokens are present
+    0,
     1_000_000,
     200_000,
     "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
@@ -137,7 +138,24 @@ test("renderModelComparison: token-based projection when tokens are recorded", (
   assert.match(text, /1\.84 یورو/); // current projected cost
   assert.match(text, /5\.52 یورو \(\+3\.68/); // sonnet, dearer
   assert.match(text, /9\.20 یورو \(\+7\.36/); // opus, dearest
-  assert.match(text, /ورودی=1000000 خروجی=200000/); // token basis surfaced
+  assert.match(text, /بر پایه‌ی توکنِ این ماه/); // token basis surfaced
+});
+
+test("renderModelComparison: anchors to spend even when partial tokens exist", () => {
+  // The regression: euro spend covers the whole month but token counters only
+  // cover post-deploy calls. Projection must follow the real 0.17 €, not the
+  // tiny token total. 0.17 on Haiku → Sonnet 0.51 (+0.34), Opus 0.85 (+0.68).
+  const text = renderModelComparison(
+    0.17,
+    2650,
+    247,
+    "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+  );
+  assert.match(text, /Claude Haiku 4\.x.*0\.17 یورو \(الان ✅\)/);
+  assert.match(text, /0\.51 یورو \(\+0\.34/); // sonnet, 3×
+  assert.match(text, /0\.85 یورو \(\+0\.68/); // opus, 5×
+  assert.match(text, /بر پایه‌ی خرجِ واقعیِ این ماه \(0\.17 یورو\)/);
+  assert.doesNotMatch(text, /0\.00 یورو/); // never zero while money was spent
 });
 
 test("renderModelComparison: scales the real spend when no tokens are recorded", () => {

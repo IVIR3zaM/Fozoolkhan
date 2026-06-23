@@ -459,19 +459,23 @@ export const monthlyResetDate = () => {
  * before changing BEDROCK_MODEL_ID. The current model is marked; each other row
  * shows the delta against it. Pure formatting over the price catalog — no Bedrock.
  *
- * Each model's projected cost is computed one of two ways, in order:
- *   1. From the month's raw token totals (exact for any price structure) — used
- *      once any tokens have been recorded.
- *   2. By scaling the actual euro spend by the model's price ratio — used for a
- *      month that has spend but no token totals yet (e.g. spend recorded before
- *      token tracking existed). This is exact as long as the catalog keeps input
- *      and output prices proportional across models (they are: 1×/3×/5×), so a
- *      month's whole bill scales by the same factor regardless of the in/out mix.
- * Without either signal (or an unknown current model) it just lists the prices.
+ * Each model's projected cost is anchored to the actual euro spend, in order:
+ *   1. Scale the real euro spend by the model's price ratio relative to the
+ *      current model. This always keeps the current model's row equal to the
+ *      "خرج‌شده" line the admin sees, and is exact as long as the catalog keeps
+ *      input and output prices proportional across models (they are: 1×/3×/5×),
+ *      so a month's whole bill scales by the same factor regardless of the in/out
+ *      mix. This is the normal path.
+ *   2. If there's no recorded spend at all, fall back to the month's raw token
+ *      totals (covers a brand-new month before the first paid call settles).
+ * We deliberately do NOT mix the two: the euro counter and the token counters can
+ * cover different windows (e.g. a month that straddles a deploy that added token
+ * tracking), so projecting from tokens while spend exists would contradict the
+ * "خرج‌شده" line. Without a known current model it just lists the prices.
  *
  * @param {number} spendEur  Euros actually spent this month.
- * @param {number} inputTokens  Input tokens recorded this month.
- * @param {number} outputTokens  Output tokens recorded this month.
+ * @param {number} inputTokens  Input tokens recorded this month (fallback only).
+ * @param {number} outputTokens  Output tokens recorded this month (fallback only).
  * @param {string} [currentModelId]  The configured model id (to mark "current").
  * @returns {string}
  */
@@ -484,13 +488,13 @@ export const renderModelComparison = (
   const current = catalogEntryFor(currentModelId);
   const haveTokens =
     (Number(inputTokens) || 0) > 0 || (Number(outputTokens) || 0) > 0;
+  // Anchor to real spend whenever we have it and know the current model; only
+  // fall back to tokens when nothing has been spent yet.
+  const useSpend = Boolean(current) && spendEur > 0;
 
   const costOf = (entry) => {
+    if (useSpend) return spendEur * (entry.usdInPerM / current.usdInPerM);
     if (haveTokens) return projectCost(entry, inputTokens, outputTokens);
-    // No token totals yet — scale the real spend by this model's price ratio.
-    if (current && spendEur > 0) {
-      return spendEur * (entry.usdInPerM / current.usdInPerM);
-    }
     return 0;
   };
 
@@ -510,9 +514,14 @@ export const renderModelComparison = (
     return `• ${m.label} — $${m.usdInPerM}/$${m.usdOutPerM} هر میلیون توکن → ${cost.toFixed(2)} یورو${suffix}`;
   });
 
-  const basis = haveTokens
-    ? `توکنِ این ماه: ورودی=${Math.round(inputTokens)} خروجی=${Math.round(outputTokens)}`
-    : `بر پایه‌ی خرجِ واقعیِ این ماه (${spendEur.toFixed(2)} یورو)`;
+  let basis;
+  if (useSpend) {
+    basis = `بر پایه‌ی خرجِ واقعیِ این ماه (${spendEur.toFixed(2)} یورو)`;
+  } else if (haveTokens) {
+    basis = `بر پایه‌ی توکنِ این ماه: ورودی=${Math.round(inputTokens)} خروجی=${Math.round(outputTokens)}`;
+  } else {
+    basis = "هنوز مصرفی ثبت نشده";
+  }
 
   return [
     "مدل‌های در دسترس و هزینه‌شون (تخمینِ خرجِ همین ماه اگه با همین مصرف روی اون مدل بودی):",
