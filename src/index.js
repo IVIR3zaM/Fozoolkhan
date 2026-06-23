@@ -17,6 +17,7 @@
 import {
   recordSighting,
   recordMessage,
+  recordBotMessage,
   getMonthlySpend,
   addMonthlySpend,
   getProfile,
@@ -26,7 +27,12 @@ import {
   getChatAccess,
   setChatAccess,
 } from "./db.js";
-import { resolveName, describeAmbiguity, learnFromMessage } from "./names.js";
+import {
+  resolveName,
+  resolveObservationTarget,
+  describeAmbiguity,
+  learnFromMessage,
+} from "./names.js";
 import { generateReply, summarizeObservations } from "./bedrock.js";
 import { sendMessage, answerCallbackQuery } from "./telegram.js";
 
@@ -36,20 +42,17 @@ import { sendMessage, answerCallbackQuery } from "./telegram.js";
 const summaryThreshold = () => Number(process.env.OBS_SUMMARY_THRESHOLD ?? 8);
 
 /**
- * Side effect after a reply (code-owned): append the LLM's one-line observation
- * about the speaker to their append-only OBS# log, then — occasionally, once a
- * threshold of observations has accumulated — compress them into the free-text
- * profile summary. The summarization is a separate Bedrock call, so it honours
- * the spend guard and increments the monthly counter; it is never the path that
- * writes structured data (only setProfileSummary, the summary field, is touched).
+ * Occasionally compress a person's accumulated observations into their free-text
+ * profile summary. Runs only once a threshold of observations has accumulated, so
+ * the extra Bedrock call is rare. It honours the spend guard and increments the
+ * monthly counter; it never writes structured data (only setProfileSummary, the
+ * summary field, is touched).
  *
- * @param {number|string} userId  The speaker's numeric user id.
- * @param {string} observation  The one-line observation (may be empty).
+ * @param {number|string} userId  The numeric user id to maybe summarize.
  * @param {number} monthlyBudget  Euro ceiling, for the spend guard re-check.
  */
-const rememberObservation = async (userId, observation, monthlyBudget) => {
-  if (!userId || !observation) return;
-  await appendObservation(userId, observation);
+const maybeSummarize = async (userId, monthlyBudget) => {
+  if (!userId) return;
 
   const observations = await getObservations(userId);
   const count = observations.length;
@@ -65,6 +68,34 @@ const rememberObservation = async (userId, observation, monthlyBudget) => {
   });
   await addMonthlySpend(costEur);
   await setProfileSummary(userId, summary);
+};
+
+/**
+ * Side effect after a reply (code-owned): for each observation the LLM emitted,
+ * resolve the spoken name it's tagged with to a numeric user id and append the
+ * note to that person's append-only OBS# log. This is what lets the bot learn
+ * who someone is from what *others* say about them, not only from their own
+ * words. Then — at most once per turn, for the speaker — fold accumulated
+ * observations into the profile summary, to keep the extra Bedrock call rare.
+ *
+ * @param {object} speaker  The speaker's Telegram `from` object.
+ * @param {Array<{name: string, note: string}>} observations  LLM-tagged notes.
+ * @param {number} monthlyBudget  Euro ceiling, for the spend guard re-check.
+ */
+const rememberObservations = async (speaker, observations, monthlyBudget) => {
+  if (!observations?.length) return;
+
+  for (const { name, note } of observations) {
+    const targetId = await resolveObservationTarget(
+      speaker,
+      name,
+      process.env.BOT_USERNAME
+    );
+    if (targetId) await appendObservation(targetId, note);
+  }
+
+  // Bound the extra Bedrock cost: summarize at most one person per turn.
+  await maybeSummarize(speaker?.id, monthlyBudget);
 };
 
 // Build a short context snippet from a profile: a name label plus the free-text
@@ -305,6 +336,31 @@ const shouldRespond = (message, botUsername) => {
 };
 
 /**
+ * Build the context for the message the trigger is a reply to, so the bot
+ * comments on the *referenced* post rather than only on its own mention. Returns
+ * undefined when the trigger isn't a reply or the replied-to message has no text.
+ * The bot's own messages are flagged `self` so the transcript marks them.
+ *
+ * @param {object} message  Telegram `message` object.
+ * @param {string} botUsername  The bot's @username (without @).
+ * @returns {{name: string, text: string, self: boolean}|undefined}
+ */
+const replyContextOf = (message, botUsername) => {
+  const replied = message?.reply_to_message;
+  const text = (replied?.text ?? replied?.caption ?? "").trim();
+  if (!text) return undefined;
+
+  const self = replied.from?.username === botUsername;
+  const name = self
+    ? "فضول‌خان"
+    : [replied.from?.first_name, replied.from?.last_name]
+        .filter(Boolean)
+        .join(" ")
+        .trim() || "یه نفر";
+  return { name, text, self };
+};
+
+/**
  * AWS Lambda Function URL handler.
  *
  * @param {object} event Function URL (payload format 2.0) event.
@@ -456,12 +512,17 @@ export const handler = async (event) => {
     console.error("Failed to resolve/read profile:", err?.message);
   }
 
+  // The message being replied to (if any), so the bot comments on the referenced
+  // post — not just on its own mention.
+  const replyTo = replyContextOf(message, process.env.BOT_USERNAME);
+
   // Generate an in-character Persian reply from the assembled context and send
   // it back, threaded under the triggering message. Errors are swallowed so
   // Telegram does not retry.
   try {
-    const { text, observation, costEur } = await generateReply({
+    const { text, observations, costEur } = await generateReply({
       recentMessages,
+      replyTo,
       profileSnippet,
       nameNote,
     });
@@ -470,13 +531,21 @@ export const handler = async (event) => {
     await addMonthlySpend(costEur);
     if (text) {
       await sendMessage(message.chat.id, text, message.message_id);
+      // Record our own reply into the rolling buffer so next turn the bot sees
+      // what it already said. Best-effort: never let it look like a failed reply.
+      try {
+        await recordBotMessage(message.chat.id, text);
+      } catch (err) {
+        console.error("Failed to record bot message:", err?.message);
+      }
     }
 
-    // Side effect: remember a one-line observation about the speaker and, every
-    // so often, fold accumulated observations into their profile summary. Kept
-    // in its own try so a memory hiccup never looks like a failed reply.
+    // Side effect: remember the LLM's tagged observations (about the speaker and
+    // any third parties named in the chat) and, occasionally, fold them into a
+    // profile summary. Kept in its own try so a memory hiccup never looks like a
+    // failed reply.
     try {
-      await rememberObservation(message.from?.id, observation, monthlyBudget);
+      await rememberObservations(message.from, observations, monthlyBudget);
     } catch (err) {
       console.error("Failed to record observation/summary:", err?.message);
     }

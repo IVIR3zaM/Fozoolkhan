@@ -160,10 +160,37 @@ export const recordSighting = async (from) => {
 };
 
 /**
- * Append a message to a chat's rolling recent-messages buffer and trim it to
- * the last `CONTEXT_MESSAGE_COUNT` entries. This is code-owned structure: the
- * buffer only ever holds a name label plus the raw message text, capped in size,
- * so context assembly never has to send full history.
+ * Append one entry to a chat's rolling recent-messages buffer and trim it to the
+ * last `CONTEXT_MESSAGE_COUNT` entries. Code-owned structure: each entry holds a
+ * name label, the raw text, and an optional `self` flag (the bot's own lines), so
+ * context assembly never has to send full history. Shared by recordMessage (an
+ * incoming message) and recordBotMessage (the bot's own reply).
+ *
+ * @param {number|string} chatId  Telegram chat id.
+ * @param {{name: string, text: string, self?: boolean}} entry
+ * @returns {Promise<Array<{name: string, text: string, self?: boolean}>>}
+ */
+const appendRecent = async (chatId, entry) => {
+  const { Item } = await docClient.send(
+    new GetCommand({ TableName: tableName(), Key: recentKey(chatId) })
+  );
+
+  const messages = Item?.messages ?? [];
+  messages.push(entry);
+  const recent = messages.slice(-contextMessageCount());
+
+  await docClient.send(
+    new PutCommand({
+      TableName: tableName(),
+      Item: { ...recentKey(chatId), messages: recent },
+    })
+  );
+
+  return recent;
+};
+
+/**
+ * Append an incoming message to a chat's rolling recent-messages buffer.
  *
  * @param {number|string} chatId  Telegram chat id.
  * @param {object} from  Telegram `message.from` object.
@@ -177,22 +204,26 @@ export const recordMessage = async (chatId, from, text) => {
   const trimmed = (text ?? "").trim();
   if (!trimmed) return null; // media-only or empty — nothing to remember.
 
-  const { Item } = await docClient.send(
-    new GetCommand({ TableName: tableName(), Key: recentKey(chatId) })
-  );
+  return appendRecent(chatId, {
+    name: displayNameOf(from) || "یه نفر",
+    text: trimmed,
+  });
+};
 
-  const messages = Item?.messages ?? [];
-  messages.push({ name: displayNameOf(from) || "یه نفر", text: trimmed });
-  const recent = messages.slice(-contextMessageCount());
-
-  await docClient.send(
-    new PutCommand({
-      TableName: tableName(),
-      Item: { ...recentKey(chatId), messages: recent },
-    })
-  );
-
-  return recent;
+/**
+ * Append the bot's own reply to the recent buffer, flagged `self` so next turn
+ * the model sees what it already said (and doesn't repeat itself or mistake its
+ * own lines for someone else's). Telegram never delivers the bot's own messages
+ * back as webhook updates, so without this the bot is blind to its own turns.
+ *
+ * @param {number|string} chatId  Telegram chat id.
+ * @param {string} text  The reply text the bot just sent.
+ */
+export const recordBotMessage = async (chatId, text) => {
+  if (!chatId) return;
+  const trimmed = (text ?? "").trim();
+  if (!trimmed) return;
+  await appendRecent(chatId, { name: "فضول‌خان", text: trimmed, self: true });
 };
 
 /**

@@ -119,6 +119,47 @@ export const resolveName = async (askerId, text, botUsername) => {
   return { status: "none" };
 };
 
+// Tokens the model uses to mean "this note is about the person who just spoke",
+// folded to the speaker's own id rather than looked up as a third party.
+const SELF_REFERENCES = new Set(["خودش", "خودت", "گوینده", "من", "طرف"]);
+
+/**
+ * Decide which numeric user id an LLM observation tagged with a spoken `name` is
+ * about — so a note like «حسن: تهدید می‌کنه» lands on Hassan's profile, learned
+ * from what *others* say, not only from his own words. Code owns the identity
+ * decision; the LLM only supplied the prose and the spoken label.
+ *
+ *   - A self-reference, or the speaker's own name → the speaker.
+ *   - The bot's own name → null (we don't profile ourselves).
+ *   - Otherwise resolve the name the same edge-biased way as addressing; only a
+ *     *confident* match anchors the note. Anything unresolved is dropped rather
+ *     than mis-attributed (never store an observation we can't pin to an id).
+ *
+ * @param {object} speaker  The speaker's Telegram `from` object.
+ * @param {string} name  The spoken name the observation is tagged with.
+ * @param {string} [botUsername]  Bot @username, used both to skip self-notes
+ *   about the bot and as the resolver's ignore token.
+ * @returns {Promise<number|string|null>} The target user id, or null to skip.
+ */
+export const resolveObservationTarget = async (speaker, name, botUsername) => {
+  const nk = normalizeName(name);
+  if (!nk) return null;
+
+  if (botUsername && nk === normalizeName(botUsername)) return null;
+  if (nk === normalizeName("فضول‌خان") || nk === normalizeName("فضول"))
+    return null;
+
+  const speakerNames = [speaker?.first_name, speaker?.last_name, speaker?.username]
+    .map(normalizeName)
+    .filter(Boolean);
+  if (SELF_REFERENCES.has(nk) || speakerNames.includes(nk)) {
+    return speaker?.id ?? null;
+  }
+
+  const resolution = await resolveName(speaker?.id, name, botUsername);
+  return resolution.status === "confident" ? resolution.userId : null;
+};
+
 /**
  * Build a short Persian instruction telling the bot it knows several people by
  * the same name and should tease about which one is meant, rather than guess.

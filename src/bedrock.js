@@ -35,24 +35,54 @@ const outputPricePer1K = () =>
   Number(process.env.BEDROCK_OUTPUT_PRICE_PER_1K_EUR ?? 0.004);
 
 // The character. Persian voice on purpose: the bot must be funny *in Persian*.
-// The humor boundary (AGENTS.md) is baked in as a trait of a clever friend who
-// is too witty to need to go low — not as a bolted-on disclaimer.
-const SYSTEM_PROMPT = `تو «فضول‌خان» هستی، یکی از اعضای باحال و حاضرجواب یک گروه دوستانه‌ی تلگرامی.
+// The humor boundary (AGENTS.md) is baked in as a trait of a clever friend in a
+// crude all-male friends' group — colloquial and salty like the rest of them,
+// but it still never goes low at a real group member.
+const SYSTEM_PROMPT = `تو «فضول‌خان» هستی، یه عضو از یه گروه رفاقتیِ مردونه تو تلگرام. لحن گروه خودمونی، شوخ و گاهی رکیکه و تو هم دقیقاً مثل بقیه حرف می‌زنی.
+
 شخصیتت:
-- شوخ، سریع، و کنایه‌زن مثل رفیقی که با همه صمیمیه.
-- شوخی‌هات گرم و دوستانه‌ست؛ موقعیت و حرف‌ها رو دست می‌ندازی، نه نقطه‌ضعف واقعی آدم‌ها رو.
-- هیچ‌وقت توهین جنسی یا تحقیر شخصی نسبت به آدم‌های واقعی نمی‌سازی، حتی اگه ازت بخوان؛ به‌جاش با یه شوخی بامزه‌تر و سبک‌تر در می‌ری. تو اون‌قدر باهوشی که نیازی به پایین‌آوردن سطح نداری.
-- همیشه فارسی و کوتاه و بامزه جواب می‌دی. چند جمله بیشتر نه.`;
+- محاوره‌ای، سریع، حاضرجواب و تیکه‌انداز؛ مثل رفیقی که باهاشون راحته.
+- لحنت کاملاً خودمونیه، نه مودب و رسمی. «جان» و تعارف و لحنِ پاستوریزه ممنوع — اینجا کسی این‌جوری حرف نمی‌زنه.
+- فحش و شوخیِ رکیکِ رفاقتی (در همون حد و حالِ خودِ بچه‌های گروه) اوکیه و وقتی یکی بهت تیکه انداخت می‌تونی متقابلاً جوابِ سنگین بدی؛ ولی هیچ‌وقت توهینِ جنسی یا تحقیرِ واقعی و شخصی به یه عضوِ واقعیِ گروه نکن. شوخی رو می‌بری سرِ موقعیت و حرف، نه سرِ نقطه‌ضعفِ واقعیِ آدم‌ها.
+- این گروه اصولاً از سیاست‌مدارها دلِ خوشی نداره و زیاد سرِ شخصیت‌های سیاسی شوخی می‌کنه؛ پس در موردِ سیاست‌مدارها و آدمای قدرت دستت بازه: مسخره کن، تیکه بنداز، حتی توهینِ خنده‌دار بکن. این‌جور شوخی‌های سیاسی اینجا کاملاً سرِ جاشه.
+- فارسیِ روان و طبیعی حرف بزن؛ پرت‌وپلا و جمله‌ی نامفهوم ننویس.
+- کوتاه جواب بده، نهایت چند جمله.
+
+به متنِ گفتگو دقت کن: اگه به یه پیام ریپلای شده یا ازت در موردِ یه پیام یا یه نفر نظر خواستن، دقیقاً در موردِ همون حرف بزن، نه یه جوابِ کلی و بی‌ربط. پیام‌هایی که با «فضول‌خان (خودت)» مشخص شدن حرف‌های خودتن؛ یادت باشه قبلاً چی گفتی، رشته‌ی شوخی رو ادامه بده و خودت رو تکرار نکن.`;
 
 // The character for the separate, occasional summarization step. It only ever
 // produces the free-text profile summary — never structured data — so the prompt
 // keeps it to a couple of plain sentences with no preamble.
 const SUMMARY_SYSTEM_PROMPT = `تو نکته‌های پراکنده‌ای را که فضول‌خان درباره‌ی یک عضو گروه جمع کرده می‌گیری و در نهایت دو-سه جمله‌ی کوتاه فارسی فشرده می‌کنی: عادت‌ها، علاقه‌ها و نوع شوخی‌هایی که با او می‌گیره. فقط همان خلاصه را بنویس، بدون مقدمه و بدون فهرست.`;
 
-// Delimiter the model puts before its one-line memory observation, so code can
-// split the user-facing reply from the observation it appends to the OBS# log.
-// Chosen so it never shows up in normal Persian chat.
+// Delimiter the model puts before its memory observations, so code can split the
+// user-facing reply from the observation lines it appends to the OBS# log. Chosen
+// so it never shows up in normal Persian chat.
 const OBS_DELIMITER = "###OBS###";
+
+/**
+ * Parse the observation block that follows OBS_DELIMITER into per-person lines.
+ * Each line is `name: note` — `name` is whoever the note is about (the speaker,
+ * or a third person named in the chat). Code (not this function) owns turning a
+ * name into a numeric user id; here we only split prose into (name, note) pairs.
+ *
+ * @param {string} block  Raw text after the delimiter (may be empty).
+ * @returns {Array<{name: string, note: string}>}
+ */
+export const parseObservationBlock = (block) => {
+  const out = [];
+  for (const rawLine of String(block ?? "").split("\n")) {
+    const line = rawLine.replace(/^[-*•\s]+/, "").trim();
+    if (!line) continue;
+    const idx = line.indexOf(":");
+    if (idx <= 0) continue; // need a non-empty name before the colon.
+    const name = line.slice(0, idx).trim();
+    const note = line.slice(idx + 1).trim();
+    if (name && note) out.push({ name, note });
+    if (out.length >= 4) break; // frugal cap.
+  }
+  return out;
+};
 
 // Pull the concatenated text and an estimated euro cost out of a Bedrock Claude
 // response payload. Shared by every call so cost accounting stays uniform (the
@@ -73,22 +103,48 @@ const parseCompletion = (payload) => {
   return { text, costEur };
 };
 
+// Render one transcript line, marking the bot's own past messages distinctly so
+// the model knows which lines it said itself (and doesn't repeat them or mistake
+// them for someone else's). `self` is set by code when the line is the bot's.
+const renderLine = (m) =>
+  m?.self ? `فضول‌خان (خودت): ${m.text}` : `${m?.name ?? "یه نفر"}: ${m?.text}`;
+
 /**
- * Build the single user turn from assembled context: a compact transcript of
- * the recent messages (oldest first, the triggering message last) plus a short
- * snippet about the person the bot is replying to. Kept tight on purpose.
+ * Build the single user turn from assembled context: a compact transcript of the
+ * recent messages (oldest first, the triggering message last), the message being
+ * replied to (if any), and a short snippet about the person the bot is replying
+ * to. Kept tight on purpose.
  *
- * @param {Array<{name: string, text: string}>} recentMessages
- * @param {string} profileSnippet
- * @param {string} [nameNote]  Optional code-owned note (e.g. an ambiguity hint).
+ * @param {object} ctx
+ * @param {Array<{name: string, text: string, self?: boolean}>} [ctx.recentMessages]
+ * @param {{name: string, text: string, self?: boolean}} [ctx.replyTo]  The
+ *   message the triggering message is a reply to, so the bot comments on the
+ *   actual referenced post — not just on its own mention.
+ * @param {string} [ctx.profileSnippet]
+ * @param {string} [ctx.nameNote]  Optional code-owned note (e.g. an ambiguity hint).
  * @returns {string}
  */
-const buildUserContent = (recentMessages, profileSnippet, nameNote) => {
+const buildUserContent = ({
+  recentMessages,
+  replyTo,
+  profileSnippet,
+  nameNote,
+} = {}) => {
   const lines = [];
 
   if (recentMessages?.length) {
-    lines.push("گفتگوی اخیر گروه:");
-    for (const m of recentMessages) lines.push(`${m.name}: ${m.text}`);
+    lines.push(
+      "گفتگوی اخیر گروه (قدیمی‌ترین بالا، آخرین خط همون پیامیه که الان باید جوابش بدی):"
+    );
+    for (const m of recentMessages) lines.push(renderLine(m));
+  }
+
+  if (replyTo?.text) {
+    lines.push("");
+    lines.push(
+      "این پیام، ریپلای به این پیامِ قبلیه؛ نظرت رو دقیقاً در موردِ همین بده:"
+    );
+    lines.push(renderLine(replyTo));
   }
 
   if (profileSnippet) {
@@ -104,7 +160,7 @@ const buildUserContent = (recentMessages, profileSnippet, nameNote) => {
   lines.push("");
   lines.push("حالا به‌عنوان فضول‌خان کوتاه و بامزه جواب بده.");
   lines.push(
-    `بعد از جواب، در یک خط جداگانه «${OBS_DELIMITER}» را بنویس و سپس یک نکته‌ی کوتاهِ یک‌خطی درباره‌ی گوینده‌ی آخرین پیام برای حافظه‌ی خودت ثبت کن (این خط به کاربر نشان داده نمی‌شود؛ اگر چیز تازه‌ای نبود خالی بگذار).`
+    `بعد از جواب، یه خطِ جدا «${OBS_DELIMITER}» بذار و بعدش — فقط اگه نکته‌ی تازه‌ای بود — برای حافظه‌ی خودت یادداشت کن؛ هر نکته تو یه خط، به شکلِ «اسمِ شخص: نکته». می‌تونی هم درباره‌ی گوینده‌ی پیام بنویسی هم درباره‌ی کسی که توی حرفا ازش اسم برده شده (مثلاً وقتی یکی درباره‌ی یه نفرِ دیگه نظری میده). اگه نکته‌ای نبود، چیزی ننویس. این بخش به کسی نشون داده نمی‌شه.`
   );
 
   return lines.join("\n");
@@ -114,21 +170,21 @@ const buildUserContent = (recentMessages, profileSnippet, nameNote) => {
  * Ask Claude Haiku to reply in-character, given assembled context.
  *
  * @param {object} context
- * @param {Array<{name: string, text: string}>} [context.recentMessages]  Last
- *   few messages, oldest first; the triggering message is the final entry.
+ * @param {Array<{name: string, text: string, self?: boolean}>} [context.recentMessages]
+ *   Last few messages, oldest first; the triggering message is the final entry.
+ *   `self` marks the bot's own past lines.
+ * @param {{name: string, text: string, self?: boolean}} [context.replyTo]  The
+ *   message being replied to, so the bot comments on the referenced post.
  * @param {string} [context.profileSnippet]  Short note about the person the bot
  *   is replying to (the speaker, or the resolved subject of their question).
  * @param {string} [context.nameNote]  Optional code-owned note, e.g. an
  *   ambiguity hint when a spoken name matched several people.
- * @returns {Promise<{text: string, observation: string, costEur: number}>} The
- *   bot's Persian reply, a one-line observation about the speaker (may be empty),
- *   and an estimated euro cost (for the monthly spend counter).
+ * @returns {Promise<{text: string, observations: Array<{name: string, note: string}>, costEur: number}>}
+ *   The bot's Persian reply, zero or more observations each tagged with the spoken
+ *   name of the person they're about (code resolves the name to a user id), and an
+ *   estimated euro cost (for the monthly spend counter).
  */
-export const generateReply = async ({
-  recentMessages,
-  profileSnippet,
-  nameNote,
-} = {}) => {
+export const generateReply = async (context = {}) => {
   const command = new InvokeModelCommand({
     modelId: modelId(),
     contentType: "application/json",
@@ -137,12 +193,7 @@ export const generateReply = async ({
       anthropic_version: "bedrock-2023-05-31",
       max_tokens: maxTokens(),
       system: SYSTEM_PROMPT,
-      messages: [
-        {
-          role: "user",
-          content: buildUserContent(recentMessages, profileSnippet, nameNote),
-        },
-      ],
+      messages: [{ role: "user", content: buildUserContent(context) }],
     }),
   });
 
@@ -150,14 +201,14 @@ export const generateReply = async ({
   const payload = JSON.parse(Buffer.from(response.body).toString("utf8"));
   const { text: raw, costEur } = parseCompletion(payload);
 
-  // Split the user-facing reply from the piggybacked one-line observation. If
-  // the model omitted the delimiter the whole completion is the reply and the
-  // observation is empty — so a missing observation never leaks into the chat.
+  // Split the user-facing reply from the piggybacked observation block. If the
+  // model omitted the delimiter the whole completion is the reply and there are
+  // no observations — so a missing observation never leaks into the chat.
   const [replyPart, ...obsParts] = raw.split(OBS_DELIMITER);
   const text = replyPart.trim();
-  const observation = obsParts.join(OBS_DELIMITER).trim();
+  const observations = parseObservationBlock(obsParts.join(OBS_DELIMITER));
 
-  return { text, observation, costEur };
+  return { text, observations, costEur };
 };
 
 /**
