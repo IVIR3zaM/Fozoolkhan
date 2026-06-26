@@ -8,8 +8,10 @@ import assert from "node:assert/strict";
 
 import {
   buildUserContent,
+  buildRepairUserContent,
   parseObservationBlock,
   parseAliasBlock,
+  parseCompletion,
   splitControlBlocks,
   SYSTEM_PROMPT,
 } from "../src/bedrock.js";
@@ -138,6 +140,12 @@ test("buildUserContent: asks for coreference only when there are unresolved name
   assert.match(withNames, /حسن/);
 });
 
+test("buildRepairUserContent: hands the raw draft to the repair pass", () => {
+  const out = buildRepairUserContent("قالیباف مثل آدمیزاد لال خودیه");
+  assert.match(out, /پیش‌نویسِ خام/);
+  assert.match(out, /قالیباف مثل آدمیزاد لال خودیه/);
+});
+
 test("parseObservationBlock: parses name:note pairs, trimming bullets", () => {
   const block = "- علی: اهل فوتباله\n* رضا: همیشه دیر میاد";
   assert.deepEqual(parseObservationBlock(block), [
@@ -212,4 +220,36 @@ test("splitControlBlocks: a completion with no delimiters is all reply", () => {
   assert.equal(text, "فقط جواب");
   assert.equal(obsBlock, "");
   assert.equal(aliasBlock, "");
+});
+
+test("parseCompletion: reads Bedrock Converse text and token usage", () => {
+  const out = parseCompletion({
+    output: {
+      message: {
+        content: [{ text: "سلام رفیق" }],
+      },
+    },
+    usage: {
+      inputTokens: 120,
+      outputTokens: 45,
+    },
+  });
+  assert.equal(out.text, "سلام رفیق");
+  assert.equal(out.inputTokens, 120);
+  assert.equal(out.outputTokens, 45);
+  assert.ok(out.costEur > 0);
+});
+
+test("parseCompletion: keeps supporting the old invoke-model payload shape", () => {
+  const out = parseCompletion({
+    content: [{ type: "text", text: "جواب قدیمی" }],
+    usage: {
+      input_tokens: 11,
+      output_tokens: 7,
+    },
+  });
+  assert.equal(out.text, "جواب قدیمی");
+  assert.equal(out.inputTokens, 11);
+  assert.equal(out.outputTokens, 7);
+  assert.ok(out.costEur > 0);
 });

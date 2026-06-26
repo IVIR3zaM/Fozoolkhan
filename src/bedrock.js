@@ -16,7 +16,7 @@
 
 import {
   BedrockRuntimeClient,
-  InvokeModelCommand,
+  ConverseCommand,
 } from "@aws-sdk/client-bedrock-runtime";
 import { priceForModel } from "./pricing.js";
 
@@ -26,6 +26,10 @@ const client = new BedrockRuntimeClient({});
 const modelId = () =>
   process.env.BEDROCK_MODEL_ID ?? "anthropic.claude-3-5-haiku-20241022-v1:0";
 const maxTokens = () => Number(process.env.MAX_RESPONSE_TOKENS ?? 300);
+const replyTemperature = () => Number(process.env.REPLY_TEMPERATURE ?? 0.7);
+const summaryTemperature = () => Number(process.env.SUMMARY_TEMPERATURE ?? 0.3);
+const repairTemperature = () => Number(process.env.REPAIR_TEMPERATURE ?? 0.25);
+const shouldRepairReply = () => /^deepseek\./i.test(modelId());
 
 // The character. Persian voice on purpose: the bot must be funny *in Persian*.
 // The humor boundary (AGENTS.md) is baked in as a trait of a clever friend in a
@@ -59,6 +63,20 @@ export const SYSTEM_PROMPT = `تو «فضول‌خان» هستی، یه عضو 
 // produces the free-text profile summary — never structured data — so the prompt
 // keeps it to a couple of plain sentences with no preamble.
 const SUMMARY_SYSTEM_PROMPT = `تو نکته‌های پراکنده‌ای را که فضول‌خان درباره‌ی یک عضو گروه جمع کرده می‌گیری و در نهایت دو-سه جمله‌ی کوتاه فارسی فشرده می‌کنی: عادت‌ها، علاقه‌ها و نوع شوخی‌هایی که با او می‌گیره. فقط همان خلاصه را بنویس، بدون مقدمه و بدون فهرست.`;
+
+// DeepSeek's first draft can be cheap and fast but sometimes lands as broken
+// Persian or a limp joke. This second-pass prompt rewrites only the user-facing
+// reply into native, compact banter; the observation/alias blocks still come
+// from the first pass.
+const REPAIR_SYSTEM_PROMPT = `تو ویراستارِ نهاییِ جوابِ «فضول‌خان»ی. کارَت اینه که پیش‌نویس را به یک جوابِ کوتاه، روان، طبیعی و واقعاً بامزه برای یک گروهِ رفاقتیِ مردونه در تلگرام تبدیل کنی.
+
+قانون‌ها:
+- فقط فارسیِ محاوره‌ایِ طبیعی. جمله‌ی شکسته، تعبیرِ نامفهوم، اصطلاحِ نصفه‌نیمه و ترجمه‌بو ممنوع.
+- اگر پیش‌نویس جوکِ خوبی ندارد، از نو یک جوکِ بهتر بساز؛ مجبور نیستی به واژه‌های خودش وفادار بمانی.
+- جواب باید کوتاه باشد: یک یا دو جمله.
+- punchline باید تمیز و مشخص باشد، نه توضیح، نه تحلیل، نه دفاع.
+- اگر سؤال بین دو نفر مقایسه می‌کند، مقایسه را روشن و قابل‌فهم نگه دار و از دلش یک تیکه‌ی تمیز دربیاور.
+- خروجی فقط متنِ نهاییِ جواب باشد؛ هیچ مقدمه، توضیح، نقل‌قول یا برچسبی نده.`;
 
 // Delimiter the model puts before its memory observations, so code can split the
 // user-facing reply from the observation lines it appends to the OBS# log. Chosen
@@ -155,20 +173,28 @@ export const parseObservationBlock = (block) => {
 };
 
 // Pull the concatenated text, the token counts, and an estimated euro cost out of
-// a Bedrock Claude response payload. Shared by every call so cost accounting stays
+// a Bedrock response payload. Shared by every call so cost accounting stays
 // uniform. The price is resolved from the configured model id (see pricing.js), so
 // switching BEDROCK_MODEL_ID re-prices the counter automatically. The raw token
 // counts are returned too, so they can be accumulated per month and re-priced
 // against other models in the admin `/usage` comparison.
-const parseCompletion = (payload) => {
-  const text = (payload.content ?? [])
-    .filter((block) => block.type === "text")
+export const parseCompletion = (payload) => {
+  const converseText = (payload.output?.message?.content ?? [])
+    .filter((block) => block?.text)
     .map((block) => block.text)
     .join("")
     .trim();
+  const invokeText = (payload.content ?? [])
+    .filter((block) => block?.type === "text")
+    .map((block) => block.text)
+    .join("")
+    .trim();
+  const text = converseText || invokeText;
 
-  const inputTokens = payload.usage?.input_tokens ?? 0;
-  const outputTokens = payload.usage?.output_tokens ?? 0;
+  const inputTokens =
+    payload.usage?.inputTokens ?? payload.usage?.input_tokens ?? 0;
+  const outputTokens =
+    payload.usage?.outputTokens ?? payload.usage?.output_tokens ?? 0;
   const { inPer1k, outPer1k } = priceForModel(modelId());
   const costEur =
     (inputTokens / 1000) * inPer1k + (outputTokens / 1000) * outPer1k;
@@ -273,6 +299,13 @@ export const buildUserContent = ({
   return lines.join("\n");
 };
 
+export const buildRepairUserContent = (draft) =>
+  [
+    "این پیش‌نویسِ خامه. اگر فارسی‌اش شکسته یا جوکش شل و بی‌معنیه، از نو بهترش کن.",
+    "",
+    draft,
+  ].join("\n");
+
 /**
  * Ask Claude Haiku to reply in-character, given assembled context.
  *
@@ -298,26 +331,24 @@ export const buildUserContent = ({
  */
 export const generateReply = async (context = {}) => {
   const userPrompt = buildUserContent(context);
-  const command = new InvokeModelCommand({
+  const command = new ConverseCommand({
     modelId: modelId(),
-    contentType: "application/json",
-    accept: "application/json",
-    body: JSON.stringify({
-      anthropic_version: "bedrock-2023-05-31",
-      max_tokens: maxTokens(),
-      system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: userPrompt }],
-    }),
+    system: [{ text: SYSTEM_PROMPT }],
+    messages: [{ role: "user", content: [{ text: userPrompt }] }],
+    inferenceConfig: {
+      maxTokens: maxTokens(),
+      temperature: replyTemperature(),
+      topP: 0.9,
+    },
   });
 
   const response = await client.send(command);
-  const payload = JSON.parse(Buffer.from(response.body).toString("utf8"));
   const {
     text: raw,
     costEur,
     inputTokens,
     outputTokens,
-  } = parseCompletion(payload);
+  } = parseCompletion(response);
 
   // Split the user-facing reply from the piggybacked control blocks. If the model
   // omitted a delimiter that block is empty — so a missing observation or alias
@@ -325,14 +356,43 @@ export const generateReply = async (context = {}) => {
   const { text, obsBlock, aliasBlock } = splitControlBlocks(raw);
   const observations = parseObservationBlock(obsBlock);
   const aliases = parseAliasBlock(aliasBlock);
+  let finalText = text;
+  let totalCostEur = costEur;
+  let totalInputTokens = inputTokens;
+  let totalOutputTokens = outputTokens;
+
+  if (shouldRepairReply() && text) {
+    const repairPrompt = buildRepairUserContent(text);
+    const repairCommand = new ConverseCommand({
+      modelId: modelId(),
+      system: [{ text: REPAIR_SYSTEM_PROMPT }],
+      messages: [{ role: "user", content: [{ text: repairPrompt }] }],
+      inferenceConfig: {
+        maxTokens: Math.min(maxTokens(), 160),
+        temperature: repairTemperature(),
+        topP: 0.9,
+      },
+    });
+    const repairResponse = await client.send(repairCommand);
+    const {
+      text: repaired,
+      costEur: repairCostEur,
+      inputTokens: repairInputTokens,
+      outputTokens: repairOutputTokens,
+    } = parseCompletion(repairResponse);
+    if (repaired) finalText = repaired;
+    totalCostEur += repairCostEur;
+    totalInputTokens += repairInputTokens;
+    totalOutputTokens += repairOutputTokens;
+  }
 
   return {
-    text,
+    text: finalText,
     observations,
     aliases,
-    costEur,
-    inputTokens,
-    outputTokens,
+    costEur: totalCostEur,
+    inputTokens: totalInputTokens,
+    outputTokens: totalOutputTokens,
     systemPrompt: SYSTEM_PROMPT,
     userPrompt,
     raw,
@@ -365,21 +425,20 @@ export const summarizeObservations = async ({ summary, observations } = {}) => {
   lines.push("خلاصه‌ی به‌روزشده را در دو-سه جمله بنویس.");
   const userPrompt = lines.join("\n");
 
-  const command = new InvokeModelCommand({
+  const command = new ConverseCommand({
     modelId: modelId(),
-    contentType: "application/json",
-    accept: "application/json",
-    body: JSON.stringify({
-      anthropic_version: "bedrock-2023-05-31",
-      max_tokens: maxTokens(),
-      system: SUMMARY_SYSTEM_PROMPT,
-      messages: [{ role: "user", content: userPrompt }],
-    }),
+    system: [{ text: SUMMARY_SYSTEM_PROMPT }],
+    messages: [{ role: "user", content: [{ text: userPrompt }] }],
+    inferenceConfig: {
+      maxTokens: maxTokens(),
+      temperature: summaryTemperature(),
+      topP: 0.9,
+    },
   });
 
   const response = await client.send(command);
-  const payload = JSON.parse(Buffer.from(response.body).toString("utf8"));
-  const { text, costEur, inputTokens, outputTokens } = parseCompletion(payload);
+  const { text, costEur, inputTokens, outputTokens } =
+    parseCompletion(response);
   return {
     summary: text,
     costEur,

@@ -15,7 +15,7 @@ Two kinds of call go to Bedrock. Both send a constant `system` string plus one
 `user` turn built in code.
 
 1. **Reply** — `generateReply()` in [src/bedrock.js](src/bedrock.js). On every
-   call the `system` is the constant below; the `user` turn is built by
+   call the first-pass `system` is the constant below; the `user` turn is built by
    `buildUserContent()` from several optional pieces, each emitted only when present:
    - `replyChain` — the thread the trigger is replying to (oldest first, last line
      the directly-replied-to message). When present, this is rendered **first** as
@@ -42,6 +42,12 @@ Two kinds of call go to Bedrock. Both send a constant `system` string plus one
      The turn always ends with the reply instruction and the `###OBS###` memory
      instruction, plus the `###ALIAS###` coreference instruction when
      `unresolvedNames` is present.
+
+   After the first pass is split into `reply` + `###OBS###` + `###ALIAS###`, the
+   bot may run a **repair pass** on the user-facing reply only. Today that repair
+   pass is enabled for `deepseek.*` models: it receives the raw draft reply and
+   rewrites it into shorter, more native Persian if needed. The observation and
+   alias blocks still come from the first pass.
 
 2. **Summarize** — `summarizeObservations()`, a separate, occasional call that
    folds a person's accumulated one-line observations into their profile summary.
@@ -96,6 +102,22 @@ scenarios show only the `user` turn.
 به متنِ گفتگو دقت کن: اگه به یه پیام ریپلای شده یا ازت در موردِ یه پیام یا یه نفر نظر خواستن، دقیقاً در موردِ همون حرف بزن، نه یه جوابِ کلی و بی‌ربط. پیام‌هایی که با «فضول‌خان (خودت)» مشخص شدن حرف‌های خودتن؛ یادت باشه قبلاً چی گفتی، ولی اگه حرفِ قبلیت نگرفت یا شکست خورد، بهش نچسب و عین همان الگو را ادامه نده — یه زاویه‌ی تازه پیدا کن.
 ```
 
+## The constant `system` string (repair pass, when enabled)
+
+This second pass only sees the draft reply text, not the whole chat context.
+
+```
+تو ویراستارِ نهاییِ جوابِ «فضول‌خان»ی. کارَت اینه که پیش‌نویس را به یک جوابِ کوتاه، روان، طبیعی و واقعاً بامزه برای یک گروهِ رفاقتیِ مردونه در تلگرام تبدیل کنی.
+
+قانون‌ها:
+- فقط فارسیِ محاوره‌ایِ طبیعی. جمله‌ی شکسته، تعبیرِ نامفهوم، اصطلاحِ نصفه‌نیمه و ترجمه‌بو ممنوع.
+- اگر پیش‌نویس جوکِ خوبی ندارد، از نو یک جوکِ بهتر بساز؛ مجبور نیستی به واژه‌های خودش وفادار بمانی.
+- جواب باید کوتاه باشد: یک یا دو جمله.
+- punchline باید تمیز و مشخص باشد، نه توضیح، نه تحلیل، نه دفاع.
+- اگر سؤال بین دو نفر مقایسه می‌کند، مقایسه را روشن و قابل‌فهم نگه دار و از دلش یک تیکه‌ی تمیز دربیاور.
+- خروجی فقط متنِ نهاییِ جواب باشد؛ هیچ مقدمه، توضیح، نقل‌قول یا برچسبی نده.
+```
+
 ---
 
 ## Scenario A — plain mention, speaker has a profile
@@ -146,6 +168,17 @@ ambiguity. رضا already has a profile summary from earlier turns.
 
 Code sends the line above `###OBS###` as the reply, then appends `روی دیر اومدنش…`
 to `USER#111`'s `OBS#` log.
+
+If the active model is `deepseek.*`, the reply line above may then go through one
+extra repair call:
+
+**Repair-pass `user` turn:**
+
+```
+این پیش‌نویسِ خامه. اگر فارسی‌اش شکسته یا جوکش شل و بی‌معنیه، از نو بهترش کن.
+
+کوه؟ رضا تو که خودت ساعتِ راه‌افتادن رو هم دیر میای، تا برسی بالا بقیه دارن برمی‌گردن 😂
+```
 
 ---
 
