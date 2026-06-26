@@ -61,14 +61,10 @@ variable "admin_user_id" {
 
 variable "bedrock_model_id" {
   description = <<-EOT
-    Bedrock model (or inference-profile) id to invoke. Default is Claude Haiku 4.5
-    via the EU cross-region inference profile — the only working Haiku in Frankfurt:
-    Claude 3.5 Haiku isn't offered in any EU region, and Claude 3 Haiku is now a
-    Legacy model that returns access-denied. Haiku 4.5 must be called through an
-    inference profile (on-demand foundation-model invocation isn't supported).
+    Bedrock model (or inference-profile) id to invoke. Default is DeepSeek v3.2.
   EOT
   type        = string
-  default     = "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
+  default     = "deepseek.v3.2"
 }
 
 variable "max_response_tokens" {

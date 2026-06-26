@@ -485,19 +485,12 @@ export const monthlyResetDate = () => {
  * before changing BEDROCK_MODEL_ID. The current model is marked; each other row
  * shows the delta against it. Pure formatting over the price catalog — no Bedrock.
  *
- * Each model's projected cost is anchored to the actual euro spend, in order:
- *   1. Scale the real euro spend by the model's price ratio relative to the
- *      current model. This always keeps the current model's row equal to the
- *      "خرج‌شده" line the admin sees, and is exact as long as the catalog keeps
- *      input and output prices proportional across models (they are: 1×/3×/5×),
- *      so a month's whole bill scales by the same factor regardless of the in/out
- *      mix. This is the normal path.
- *   2. If there's no recorded spend at all, fall back to the month's raw token
- *      totals (covers a brand-new month before the first paid call settles).
- * We deliberately do NOT mix the two: the euro counter and the token counters can
- * cover different windows (e.g. a month that straddles a deploy that added token
- * tracking), so projecting from tokens while spend exists would contradict the
- * "خرج‌شده" line. Without a known current model it just lists the prices.
+ * Each model's projected cost prefers the month's raw token totals whenever they
+ * exist, because once the catalog includes non-proportional models (e.g.
+ * DeepSeek vs Claude) a simple spend ratio is no longer exact. If token totals
+ * aren't available yet, it falls back to scaling the real euro spend relative to
+ * the current model as an approximation. Without a known current model it just
+ * lists the prices.
  *
  * @param {number} spendEur  Euros actually spent this month.
  * @param {number} inputTokens  Input tokens recorded this month (fallback only).
@@ -514,13 +507,12 @@ export const renderModelComparison = (
   const current = catalogEntryFor(currentModelId);
   const haveTokens =
     (Number(inputTokens) || 0) > 0 || (Number(outputTokens) || 0) > 0;
-  // Anchor to real spend whenever we have it and know the current model; only
-  // fall back to tokens when nothing has been spent yet.
-  const useSpend = Boolean(current) && spendEur > 0;
+  const useTokens = haveTokens;
+  const useSpend = !useTokens && Boolean(current) && spendEur > 0;
 
   const costOf = (entry) => {
+    if (useTokens) return projectCost(entry, inputTokens, outputTokens);
     if (useSpend) return spendEur * (entry.usdInPerM / current.usdInPerM);
-    if (haveTokens) return projectCost(entry, inputTokens, outputTokens);
     return 0;
   };
 
@@ -541,10 +533,10 @@ export const renderModelComparison = (
   });
 
   let basis;
-  if (useSpend) {
-    basis = `بر پایه‌ی خرجِ واقعیِ این ماه (${spendEur.toFixed(2)} یورو)`;
-  } else if (haveTokens) {
+  if (useTokens) {
     basis = `بر پایه‌ی توکنِ این ماه: ورودی=${Math.round(inputTokens)} خروجی=${Math.round(outputTokens)}`;
+  } else if (useSpend) {
+    basis = `بر پایه‌ی خرجِ واقعیِ این ماه (${spendEur.toFixed(2)} یورو)`;
   } else {
     basis = "هنوز مصرفی ثبت نشده";
   }

@@ -1,28 +1,32 @@
 // Model price catalog for فضول‌خان (Fozoolkhan).
 //
-// One place that knows what each Claude model costs, so two things stay in sync:
+// One place that knows what each supported model costs, so two things stay in
+// sync:
 //   1. the live spend estimate (bedrock.js prices each call by the configured
 //      model id — change BEDROCK_MODEL_ID and the counter re-prices automatically), and
 //   2. the admin `/usage` comparison table (what this month's *actual* token
 //      usage would have cost on every other model — see renderModelComparison).
 //
-// Prices are Anthropic's published list rates in USD per million tokens. Amazon
-// Bedrock bills Claude at those same rates, and a cross-region inference profile
-// (the `eu.anthropic.*` ids we run in Frankfurt) adds no surcharge — tokens are
-// billed at the base per-token price. The euro figures the rest of the code uses
-// are these USD rates times USD_TO_EUR.
+// Prices are USD list rates per million tokens. The euro figures the rest of the
+// code uses are these USD rates times USD_TO_EUR.
 
 // USD→EUR factor applied to every price. A single knob so the estimate tracks the
 // exchange rate without editing per-model numbers. Override via env if the rate
 // drifts; ~0.92 means 1 USD ≈ 0.92 EUR (EUR/USD ≈ 1.087).
 export const usdToEur = () => Number(process.env.USD_TO_EUR ?? 0.92);
 
-// The Claude families we can realistically point the bot at on Bedrock, with
+// The model families we can realistically point the bot at on Bedrock, with
 // their list prices (USD per million tokens). `key` is matched as a substring of
-// the configured model id, so the EU inference-profile ids resolve without
-// hardcoding the full string (e.g. "eu.anthropic.claude-haiku-4-5-…" → haiku-4).
-// Prices reflect the current 4.x generation (Haiku 4.5 / Sonnet 4.6 / Opus 4.8).
+// the configured model id, so inference-profile ids resolve without hardcoding
+// the full string (e.g. "us.anthropic.claude-sonnet-4-6" → sonnet-4, or
+// "deepseek.v3.2" → deepseek-v3.2).
 export const MODEL_CATALOG = [
+  {
+    key: "deepseek.v3.2",
+    label: "DeepSeek v3.2",
+    usdInPerM: 0.62,
+    usdOutPerM: 1.85,
+  },
   { key: "haiku-4", label: "Claude Haiku 4.x", usdInPerM: 1, usdOutPerM: 5 },
   { key: "sonnet-4", label: "Claude Sonnet 4.x", usdInPerM: 3, usdOutPerM: 15 },
   { key: "opus-4", label: "Claude Opus 4.x", usdInPerM: 5, usdOutPerM: 25 },

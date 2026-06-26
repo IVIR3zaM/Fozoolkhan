@@ -122,6 +122,7 @@ test("renderUsage: clamps remaining at zero and flags over-budget", () => {
 
 test("renderUsage: appends the model comparison table", () => {
   const text = renderUsage(1.5, 5, { inputTokens: 1_000_000, outputTokens: 0 });
+  assert.match(text, /DeepSeek v3\.2/);
   assert.match(text, /Claude Haiku 4\.x/);
   assert.match(text, /Claude Sonnet 4\.x/);
   assert.match(text, /Claude Opus 4\.x/);
@@ -144,21 +145,18 @@ test("renderModelComparison: token fallback only when nothing has been spent", (
   assert.match(text, /بر پایه‌ی توکنِ این ماه/); // token basis surfaced
 });
 
-test("renderModelComparison: anchors to spend even when partial tokens exist", () => {
-  // The regression: euro spend covers the whole month but token counters only
-  // cover post-deploy calls. Projection must follow the real 0.17 €, not the
-  // tiny token total. 0.17 on Haiku → Sonnet 0.51 (+0.34), Opus 0.85 (+0.68).
+test("renderModelComparison: prefers exact token pricing when token totals exist", () => {
+  process.env.USD_TO_EUR = "0.92";
   const text = renderModelComparison(
     0.17,
-    2650,
-    247,
+    1_000_000,
+    200_000,
     "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
   );
-  assert.match(text, /Claude Haiku 4\.x.*0\.17 یورو \(الان ✅\)/);
-  assert.match(text, /0\.51 یورو \(\+0\.34/); // sonnet, 3×
-  assert.match(text, /0\.85 یورو \(\+0\.68/); // opus, 5×
-  assert.match(text, /بر پایه‌ی خرجِ واقعیِ این ماه \(0\.17 یورو\)/);
-  assert.doesNotMatch(text, /0\.00 یورو/); // never zero while money was spent
+  assert.match(text, /Claude Haiku 4\.x — \$1\/\$5.*1\.84 یورو \(الان ✅\)/);
+  assert.match(text, /DeepSeek v3\.2 — \$0\.62\/\$1\.85.*0\.91 یورو/);
+  assert.match(text, /Claude Sonnet 4\.x — \$3\/\$15.*5\.52 یورو/);
+  assert.match(text, /بر پایه‌ی توکنِ این ماه/);
 });
 
 test("renderModelComparison: scales the real spend when no tokens are recorded", () => {

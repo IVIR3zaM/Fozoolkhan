@@ -1,6 +1,6 @@
 # Infrastructure (Terraform)
 
-Deploys فضول‌خان to AWS **Frankfurt (eu-central-1)** with the `personal` profile:
+Deploys فضول‌خان to AWS with the `personal` profile:
 
 - **DynamoDB** single table (on-demand, TTL on `ttl`)
 - **Lambda** (Node 20, arm64) with a public **Function URL** (no API Gateway)
@@ -10,19 +10,20 @@ Deploys فضول‌خان to AWS **Frankfurt (eu-central-1)** with the `personal
 
 ## Model note (important)
 
-Claude **3.5 Haiku is not available in any EU region**, and Claude **3 Haiku is
-now Legacy** (returns access-denied if unused for 30 days). The only working
-Haiku in Frankfurt is **Claude Haiku 4.5**, invoked via the EU cross-region
-inference profile `eu.anthropic.claude-haiku-4-5-20251001-v1:0` (it cannot be
-called as a direct on-demand foundation model). That is the Terraform default.
+The Terraform default is now **DeepSeek v3.2** (`deepseek.v3.2`).
+
+As of **2026-06-26**, a live Bedrock check showed DeepSeek in **us-east-1** and
+**us-east-2**, but **not** in **eu-central-1**. If you want the default model to
+work unchanged, set `aws_region = "us-east-1"` in `terraform.tfvars`.
+
 The €5/month in-code spend guard still caps cost regardless of model.
 
 ## One-time prerequisites
 
 1. **Create the bot** with [@BotFather](https://t.me/BotFather); save the token.
    Run `/setprivacy` → **Disable**, so the bot sees group mentions/replies.
-2. **Enable Bedrock model access** for _Claude Haiku 4.5_ in eu-central-1:
-   Bedrock console → Model access → enable Anthropic Claude Haiku 4.5.
+2. **Enable Bedrock model access** for _DeepSeek v3.2_ in your target region:
+   Bedrock console → Model access → enable DeepSeek V3.2.
    (Verify: the deploy step below test-invokes it.)
 
 ## Deploy
@@ -44,6 +45,20 @@ terraform output -raw telegram_secret_token    # secret token (generated)
 ```
 
 ## Wire up the Telegram webhook
+
+Automatic path:
+
+```bash
+cd infra
+./register-webhook.sh
+```
+
+The script reads `telegram_bot_token` plus optional `aws_region` / `aws_profile`
+from `terraform.tfvars`, reads `function_url` and `telegram_secret_token` from
+Terraform output, calls `setWebhook`, then prints `getWebhookInfo` so you can
+see what Telegram currently points at.
+
+Manual path:
 
 ```bash
 BOT_TOKEN='<from BotFather>'
@@ -75,7 +90,7 @@ Watch logs:
 
 ```bash
 aws logs tail "$(terraform output -raw log_group)" --follow \
-  --region eu-central-1 --profile personal
+  --region <your terraform region> --profile personal
 ```
 
 ## Tear down

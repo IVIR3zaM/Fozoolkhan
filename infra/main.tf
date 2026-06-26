@@ -133,9 +133,11 @@ resource "aws_iam_role_policy" "lambda" {
           "bedrock:InvokeModel",
         ]
         # Foundation models (any region, for direct + cross-region routing) and
-        # this account's inference profiles. Scoped to Anthropic models.
+        # this account's inference profiles. Scoped to the model families this
+        # bot currently uses.
         Resource = [
           "arn:aws:bedrock:*::foundation-model/anthropic.*",
+          "arn:aws:bedrock:*::foundation-model/deepseek.*",
           "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*",
         ]
       },

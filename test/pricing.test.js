@@ -29,6 +29,9 @@ test("catalogEntryFor: resolves the EU inference-profile id to its family", () =
 
   const opus = catalogEntryFor("anthropic.claude-opus-4-8");
   assert.equal(opus.key, "opus-4");
+
+  const deepseek = catalogEntryFor("deepseek.v3.2");
+  assert.equal(deepseek.key, "deepseek.v3.2");
 });
 
 test("catalogEntryFor: null for a model the catalog doesn't know", () => {
@@ -49,6 +52,10 @@ test("priceForModel: known model prices from the catalog", () => {
   // $5/$25 per M at 0.92.
   assert.ok(Math.abs(inPer1k - 0.0046) < 1e-9);
   assert.ok(Math.abs(outPer1k - 0.023) < 1e-9);
+
+  const deepseek = priceForModel("deepseek.v3.2");
+  assert.ok(Math.abs(deepseek.inPer1k - 0.0005704) < 1e-9);
+  assert.ok(Math.abs(deepseek.outPer1k - 0.001702) < 1e-9);
 });
 
 test("priceForModel: unknown model falls back to the default Haiku rate", () => {
