@@ -42,7 +42,7 @@ test("buildUserContent: includes the replied-to post and the profile snippet", (
     replyChain: [{ name: "علی", text: "حرف قبلی" }],
     profileSnippet: "علی — اهل شوخی",
   });
-  assert.match(out, /ریپلای/);
+  assert.match(out, /موضوعِ اصلیِ جواب/);
   assert.match(out, /علی: حرف قبلی/);
   assert.match(out, /علی — اهل شوخی/);
 });
@@ -56,7 +56,7 @@ test("buildUserContent: renders a multi-message reply chain oldest-first", () =>
     ],
   });
   // Framed as a thread, not a single reply.
-  assert.match(out, /رشته‌ی گفتگو/);
+  assert.match(out, /رشته‌ی ریپلایه/);
   // Oldest-first ordering is preserved, and the bot's own line is marked.
   assert.ok(
     out.indexOf("علی: ریشه") < out.indexOf("فضول‌خان (خودت): جوابِ بات"),
@@ -69,7 +69,7 @@ test("buildUserContent: renders a multi-message reply chain oldest-first", () =>
 test("buildUserContent: omits optional sections when not provided", () => {
   const out = buildUserContent({ recentMessages: [{ name: "x", text: "y" }] });
   assert.doesNotMatch(out, /ریپلای/);
-  assert.doesNotMatch(out, /نکته‌ای درباره‌ش/); // no speaker snippet section
+  assert.doesNotMatch(out, /خودِ کسی که الان داری بهش جواب می‌دی/);
   assert.doesNotMatch(out, /می‌پرسه/); // no "asking about" subjects section
 });
 
@@ -82,12 +82,27 @@ test("buildUserContent: keeps the speaker as addressee and subjects as who they 
     subjectSnippets: ["حسام — طنزِ سیاسی تند"],
   });
   // Speaker is the one being replied to.
-  assert.match(out, /گوینده‌ی پیام که الان داری بهش جواب می‌دی همینه/);
+  assert.match(out, /خودِ کسی که الان داری بهش جواب می‌دی/);
   assert.match(out, /رضا — رفیقِ شوخ/);
   // Subject is framed as "asked about", and the model is told not to address them.
   assert.match(out, /گوینده داره ازت درباره‌ی این آدم\(ها\) می‌پرسه/);
   assert.match(out, /جوابت رو به خودِ گوینده بده، نه به این‌ها/);
   assert.match(out, /حسام — طنزِ سیاسی تند/);
+});
+
+test("buildUserContent: when replying in a thread, puts the reply chain before group weather", () => {
+  const out = buildUserContent({
+    replyChain: [{ name: "علی", text: "اصلِ حرف" }],
+    recentMessages: [
+      { name: "رضا", text: "حاشیه" },
+      { name: "ممد", text: "پیامِ فعلی" },
+    ],
+  });
+  assert.ok(
+    out.indexOf("موضوعِ اصلیِ جواب") <
+      out.indexOf("اینم فقط برای فهمیدن حال‌وهوای اخیر گروهه"),
+  );
+  assert.match(out, /موضوعِ اصلیِ جواب نیست/);
 });
 
 test("buildUserContent: lists several asked-about subjects", () => {

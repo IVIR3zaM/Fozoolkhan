@@ -16,16 +16,20 @@ Two kinds of call go to Bedrock. Both send a constant `system` string plus one
 
 1. **Reply** — `generateReply()` in [src/bedrock.js](src/bedrock.js). On every
    call the `system` is the constant below; the `user` turn is built by
-   `buildUserContent()` from four optional pieces, each emitted only when present:
+   `buildUserContent()` from several optional pieces, each emitted only when present:
+   - `replyChain` — the thread the trigger is replying to (oldest first, last line
+     the directly-replied-to message). When present, this is rendered **first** as
+     the main target of the joke.
    - `recentMessages` — the rolling per-chat buffer (last `CONTEXT_MESSAGE_COUNT`
      entries, oldest first; the triggering message is the final line). The bot's
-     own past lines carry `self: true` and render as `فضول‌خان (خودت):`.
-   - `replyTo` — the message the trigger is a reply to (so the bot comments on the
-     referenced post, not just on its own mention).
+     own past lines carry `self: true` and render as `فضول‌خان (خودت):`. When
+     `replyChain` exists this section is explicitly framed as just the recent group
+     "weather", not the main thing to answer.
    - `profileSnippet` — context about the **speaker** (the person the bot is
-     replying to), always present so the bot knows who it's addressing. Line shape
-     is `names_seen[0] — summary`, or `names_seen[0] — <recent raw observations>`
-     when the summarizer hasn't run yet (`subjectSnippet`).
+     replying to), always present so the bot knows who it's addressing. On broad
+     mentions it is `names_seen[0] — summary`; on a focused reply thread / an ask
+     about someone else it is deliberately trimmed to just `names_seen[0]` so
+     stale speaker memory cannot steal the topic.
    - `subjectSnippets` — context about the people the speaker is asking _about_
      (one line each — a message can ask about several at once), framed distinctly
      so the model answers the **speaker** about them rather than mistaking a
@@ -77,6 +81,13 @@ scenarios show only the `user` turn.
 - فارسیِ روان و طبیعی حرف بزن؛ پرت‌وپلا و جمله‌ی نامفهوم ننویس.
 - کوتاه جواب بده، نهایت چند جمله.
 
+اولویتت برای جواب:
+1) اگه پیام ریپلای به یه رشته‌ست، اصلِ جواب و شوخی باید روی همون رشته و آخرین پیامِ همون باشه.
+2) «گفتگوی اخیر گروه» فقط برای فهمیدن حال‌وهوا و چاشنیه؛ حق نداری به‌جای موضوعِ اصلی بری جوابِ اونا رو بدی.
+3) چیزایی که از قبل درباره‌ی آدم‌ها می‌دونی فقط وقتی استفاده کن که شوخیِ همین لحظه رو تیزتر کنه؛ حق نداری بحث رو ببری سمت خاطره یا context قدیمیِ بی‌ربط.
+4) اگه ریپلای نبود و فقط منشن شدی، می‌تونی از حال‌وهوای اخیر گروه برای ساختن شوخی استفاده کنی.
+5) جوابِ کلی، نصیحتی یا بی‌جون نده؛ از خودِ حرف یه گیرِ مشخص پیدا کن و همون رو بکوب تو جواب.
+
 به متنِ گفتگو دقت کن: اگه به یه پیام ریپلای شده یا ازت در موردِ یه پیام یا یه نفر نظر خواستن، دقیقاً در موردِ همون حرف بزن، نه یه جوابِ کلی و بی‌ربط. پیام‌هایی که با «فضول‌خان (خودت)» مشخص شدن حرف‌های خودتن؛ یادت باشه قبلاً چی گفتی، رشته‌ی شوخی رو ادامه بده و خودت رو تکرار نکن.
 ```
 
@@ -114,7 +125,7 @@ ambiguity. رضا already has a profile summary from earlier turns.
 علی: بچه‌ها فردا میاید کوه؟
 رضا: @fozoolkhan_bot نظرت چیه راجبش؟
 
-نکته‌ای درباره‌ی کسی که الان مخاطبته: رضا — رفیقِ شوخ که عاشقِ کوه و طبیعته و همیشه دیر میاد.
+خودِ کسی که الان داری بهش جواب می‌دی: رضا — رفیقِ شوخ که عاشقِ کوه و طبیعته و همیشه دیر میاد.
 
 حالا به‌عنوان فضول‌خان کوتاه و بامزه جواب بده.
 بعد از جواب، یه خطِ جدا «###OBS###» بذار و بعدش — فقط اگه نکته‌ی تازه‌ای بود — برای حافظه‌ی خودت یادداشت کن؛ هر نکته تو یه خط، به شکلِ «اسمِ شخص: نکته». می‌تونی هم درباره‌ی گوینده‌ی پیام بنویسی هم درباره‌ی کسی که توی حرفا ازش اسم برده شده (مثلاً وقتی یکی درباره‌ی یه نفرِ دیگه نظری میده). اگه نکته‌ای نبود، چیزی ننویس. این بخش به کسی نشون داده نمی‌شه.
@@ -162,18 +173,21 @@ talks about حسن (a third person the bot has seen before, `user_id 333`).
 **Stored state used:**
 
 - `RECENT` buffer (oldest→newest, trigger last).
-- `replyTo = {name:"علی", text:"حسن گفته فردا میاد حسابِ فضول‌خان رو می‌رسه 😂", self:false}`.
-- `profileSnippet` for رضا (the speaker) if any.
+- `replyChain = [{name:"علی", text:"حسن گفته فردا میاد حسابِ فضول‌خان رو می‌رسه 😂", self:false}]`.
+- `profileSnippet = "رضا"` (trimmed because the main job is the reply thread, not
+  رضا's old summary).
 
 **Final `user` turn:**
 
 ```
-گفتگوی اخیر گروه (قدیمی‌ترین بالا، آخرین خط همون پیامیه که الان باید جوابش بدی):
+موضوعِ اصلیِ جواب همین پیامیه که بهش ریپلای شده؛ نظرت رو دقیقاً در موردِ همین بده:
+علی: حسن گفته فردا میاد حسابِ فضول‌خان رو می‌رسه 😂
+
+اینم فقط برای فهمیدن حال‌وهوای اخیر گروهه؛ موضوعِ اصلیِ جواب نیست:
 علی: حسن گفته فردا میاد حسابِ فضول‌خان رو می‌رسه 😂
 رضا: @fozoolkhan_bot اینو دیدی؟
 
-این پیام، ریپلای به این پیامِ قبلیه؛ نظرت رو دقیقاً در موردِ همین بده:
-علی: حسن گفته فردا میاد حسابِ فضول‌خان رو می‌رسه 😂
+خودِ کسی که الان داری بهش جواب می‌دی: رضا
 
 حالا به‌عنوان فضول‌خان کوتاه و بامزه جواب بده.
 بعد از جواب، یه خطِ جدا «###OBS###» بذار و بعدش — فقط اگه نکته‌ی تازه‌ای بود — برای حافظه‌ی خودت یادداشت کن؛ هر نکته تو یه خط، به شکلِ «اسمِ شخص: نکته». می‌تونی هم درباره‌ی گوینده‌ی پیام بنویسی هم درباره‌ی کسی که توی حرفا ازش اسم برده شده (مثلاً وقتی یکی درباره‌ی یه نفرِ دیگه نظری میده). اگه نکته‌ای نبود، چیزی ننویس. این بخش به کسی نشون داده نمی‌شه.
@@ -200,18 +214,20 @@ is stored even though حسن didn't speak this turn.
 triggers it).
 
 **Stored state used:** the buffer contains the bot's own previous line.
-`replyTo` is the bot's own message (`self:true`).
+`replyChain` ends at the bot's own message (`self:true`).
 
 **Final `user` turn:**
 
 ```
-گفتگوی اخیر گروه (قدیمی‌ترین بالا، آخرین خط همون پیامیه که الان باید جوابش بدی):
+موضوعِ اصلیِ جواب همین پیامیه که بهش ریپلای شده؛ نظرت رو دقیقاً در موردِ همین بده:
+فضول‌خان (خودت): تیمِ ملی؟ همونایی که بلدن فقط تو پخشِ زنده ببازن؟ 😏
+
+اینم فقط برای فهمیدن حال‌وهوای اخیر گروهه؛ موضوعِ اصلیِ جواب نیست:
 رضا: فضول‌خان نظرت راجبِ تیمِ ملی چیه؟
 فضول‌خان (خودت): تیمِ ملی؟ همونایی که بلدن فقط تو پخشِ زنده ببازن؟ 😏
 رضا: حالا چرا انقد بد می‌گی آخه
 
-این پیام، ریپلای به این پیامِ قبلیه؛ نظرت رو دقیقاً در موردِ همین بده:
-فضول‌خان (خودت): تیمِ ملی؟ همونایی که بلدن فقط تو پخشِ زنده ببازن؟ 😏
+خودِ کسی که الان داری بهش جواب می‌دی: رضا
 
 حالا به‌عنوان فضول‌خان کوتاه و بامزه جواب بده.
 بعد از جواب، یه خطِ جدا «###OBS###» بذار و بعدش — فقط اگه نکته‌ی تازه‌ای بود — برای حافظه‌ی خودت یادداشت کن؛ هر نکته تو یه خط، به شکلِ «اسمِ شخص: نکته». می‌تونی هم درباره‌ی گوینده‌ی پیام بنویسی هم درباره‌ی کسی که توی حرفا ازش اسم برده شده (مثلاً وقتی یکی درباره‌ی یه نفرِ دیگه نظری میده). اگه نکته‌ای نبود، چیزی ننویس. این بخش به کسی نشون داده نمی‌شه.
@@ -226,8 +242,8 @@ instead of treating it as someone else's or repeating it.
 
 **Situation:** رضا asks the bot about «علی», but the bot knows two people called علی
 and the edge-biased scores don't clearly favour one. `resolveName` returns
-`ambiguous`, so `describeAmbiguity` writes a `nameNote`. No `profileSnippet` is
-swapped in (we're not confident who is meant).
+`ambiguous`, so `describeAmbiguity` writes a `nameNote`. The speaker snippet stays
+about رضا; no subject snippet is added because we are not confident who «علی» is.
 
 **Final `user` turn:**
 
@@ -235,7 +251,7 @@ swapped in (we're not confident who is meant).
 گفتگوی اخیر گروه (قدیمی‌ترین بالا، آخرین خط همون پیامیه که الان باید جوابش بدی):
 رضا: فضول‌خان علی کجاست؟ پیداش نیست
 
-نکته‌ای درباره‌ی کسی که الان مخاطبته: رضا
+خودِ کسی که الان داری بهش جواب می‌دی: رضا
 
 چند نفر رو با اسم «علی» می‌شناسی (علی رضایی، علی کریمی) و مطمئن نیستی منظورش کدومه. به‌جای جواب مستقیم، بامزه بپرس کدوم «علی» رو می‌گه.
 

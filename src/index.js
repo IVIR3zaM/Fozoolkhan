@@ -177,6 +177,20 @@ const rememberAliases = async (aliases, participants) => {
 const snippetOf = (profile) =>
   [profile?.names_seen?.[0], profile?.summary].filter(Boolean).join(" — ");
 
+// The speaker's own long-lived summary is useful when the bot is riffing on a
+// broad @-mention, but it can hijack replies to a specific thread or to a
+// question about someone else. In those focused cases, keep only the speaker's
+// label so the model knows who it's answering without dragging in stale context.
+export const speakerSnippet = (
+  profile,
+  { replyChain = [], subjectSnippets = [] } = {},
+) => {
+  const label = profile?.names_seen?.[0] || profile?.usernames_seen?.[0] || "";
+  if (!label) return "";
+  if (replyChain.length || subjectSnippets.length) return label;
+  return snippetOf(profile);
+};
+
 // How many raw observations to fall back to when a subject has no summary yet.
 // Kept small so the snippet stays token-frugal (a hard rule — see AGENTS.md).
 export const SUBJECT_OBS_FALLBACK = 5;
@@ -1290,7 +1304,6 @@ export const handler = async (event) => {
   let resolution = null; // kept for the debug dump (name-resolution outcome).
   try {
     speaker = await recordSighting(message.from);
-    profileSnippet = snippetOf(speaker);
 
     // A message can name several people ("حسام و علی رو چی می‌دونی") — resolve
     // them all and feed each one's context, not just the first match.
@@ -1322,6 +1335,7 @@ export const handler = async (event) => {
   // capped by a char budget, so the bot comments on the referenced post *and* its
   // context — not just on its own mention — without ballooning the prompt.
   const replyChain = await loadReplyChain(message, process.env.BOT_USERNAME);
+  profileSnippet = speakerSnippet(speaker, { replyChain, subjectSnippets });
 
   // DEBUG MODE (admin only): if the admin put `#debug` in the triggering message,
   // run the same pipeline but, instead of replying, dump everything — the data

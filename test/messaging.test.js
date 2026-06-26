@@ -10,6 +10,7 @@ import {
   shouldRespond,
   replyContextOf,
   loadReplyChain,
+  speakerSnippet,
   subjectSnippet,
   SUBJECT_OBS_FALLBACK,
   buildParticipantIndex,
@@ -265,6 +266,27 @@ test("subjectSnippet: caps the fallback to the most recent observations", () => 
 test("subjectSnippet: just the name when there's no summary and no observations", () => {
   const subject = { names_seen: ["حسام"], summary: "" };
   assert.equal(subjectSnippet(subject, []), "حسام");
+});
+
+test("speakerSnippet: keeps the full summary when the bot is riffing on a broad mention", () => {
+  const speaker = { names_seen: ["رضا"], summary: "همیشه دیر میاد" };
+  assert.equal(speakerSnippet(speaker), "رضا — همیشه دیر میاد");
+});
+
+test("speakerSnippet: trims stale speaker memory when replying in a thread", () => {
+  const speaker = { names_seen: ["رضا"], summary: "همیشه دیر میاد" };
+  assert.equal(
+    speakerSnippet(speaker, { replyChain: [{ name: "علی", text: "حرف" }] }),
+    "رضا",
+  );
+});
+
+test("speakerSnippet: trims stale speaker memory when the ask is about someone else", () => {
+  const speaker = { names_seen: ["رضا"], summary: "همیشه دیر میاد" };
+  assert.equal(
+    speakerSnippet(speaker, { subjectSnippets: ["حسام — فوتبال"] }),
+    "رضا",
+  );
 });
 
 // buildParticipantIndex — the code-owned label→id map that grounds LLM
