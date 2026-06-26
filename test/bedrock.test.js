@@ -11,6 +11,7 @@ import {
   parseObservationBlock,
   parseAliasBlock,
   splitControlBlocks,
+  SYSTEM_PROMPT,
 } from "../src/bedrock.js";
 
 test("buildUserContent: always ends by asking for an in-character reply", () => {
@@ -18,6 +19,13 @@ test("buildUserContent: always ends by asking for an in-character reply", () => 
   assert.match(out, /به‌عنوان فضول‌خان/);
   // And always instructs the observation block with the delimiter.
   assert.match(out, /###OBS###/);
+});
+
+test("SYSTEM_PROMPT: prioritizes fresh laughs over defending failed jokes", () => {
+  assert.match(SYSTEM_PROMPT, /هدفت اول از همه خندوندنه/);
+  assert.match(SYSTEM_PROMPT, /از جوکِ قبلی دفاع نکن/);
+  assert.match(SYSTEM_PROMPT, /سریع ریست کن و یه شوخیِ تازه و مستقل بساز/);
+  assert.match(SYSTEM_PROMPT, /اگه حرفِ قبلیت نگرفت یا شکست خورد، بهش نچسب/);
 });
 
 test("buildUserContent: renders the recent transcript oldest-first", () => {
